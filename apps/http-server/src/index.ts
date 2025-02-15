@@ -122,10 +122,9 @@ app.post("/room", middleware, async (req, res) => {
 })
 
 app.get("/chats/:roomId", async(req, res) => {
-    const roomId = Number(req.params.roomId);
-
     //db call
     try {
+        const roomId = Number(req.params.roomId);
         const messages = await prismaClient.chat.findMany({
             where: {
                 roomId: roomId
@@ -141,9 +140,30 @@ app.get("/chats/:roomId", async(req, res) => {
         })
     } catch (e) {
         res.status(411).json({
-            message: "Error while loading messages"
+            message: []
         })
     }
 })
+
+app.get("/room/:slug", async(req, res) => {
+    const slug = req.params.slug;
+
+    //db call
+    try {
+        const room = await prismaClient.room.findFirst({
+            where: {
+                slug
+            }
+        });
+
+        res.json({
+            room
+        })
+    } catch (e) {
+        res.status(411).json({
+            message: "Error Getting Slug"
+        });
+    };
+});
 
 app.listen(3001)
