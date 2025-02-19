@@ -63,10 +63,13 @@ wss.on("connection", function connection(ws, request) {
 
   ws.on("message", async function message(data) {
     //TODO: check the type first only if its a string then proceed
-    // if (typeof data !== "string") {
-    //   return;
-    // }
-    const parsedData = JSON.parse(data as unknown as string);
+    let parsedData;
+    if (typeof data !== "string") {
+      parsedData = JSON.parse(data.toString());
+    } else {
+      parsedData = JSON.parse(data);
+    }
+  
 
     //TODO: does the roomId exists then only let the user to subscribe messages to the room, does the user have the access to join the specific room(only some people can join the room)
 
@@ -94,7 +97,7 @@ wss.on("connection", function connection(ws, request) {
       try {
         await prismaClient.chat.create({
             data: {
-                roomId,
+                roomId: Number(roomId),
                 message,
                 userId
             }
