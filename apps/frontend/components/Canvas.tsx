@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { Circle, Pencil, RectangleHorizontalIcon } from "lucide-react";
+import { Circle, Minus, Pencil, RectangleHorizontalIcon } from "lucide-react";
 import { Game } from "@/app/draw/Game";
 import { useWindowSize } from "@/hooks/useWindowSize";
 
-
 //TODO: use enumns for circle rect pencil etc
-export type Tool = "circle" | "rect" | "pencil";
-
+export type Tool = "circle" | "rect" | "pencil" | "line";
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -21,7 +19,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   }, [selectedTool, game]);
 
   useEffect(() => {
-    if (canvasRef.current && !game) {
+    if (canvasRef.current) {
       const g = new Game(canvasRef.current, roomId, socket);
       setGame(g);
 
@@ -29,7 +27,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
         g.destroy();
       };
     }
-  }, [canvasRef, roomId, socket, game]);
+  }, [canvasRef, roomId, socket, width, height]);
 
   // To update tool when changed
   useEffect(() => {
@@ -89,6 +87,13 @@ function Topbar({
           icon={<Circle />}
           onClick={() => {
             setSelectedTool("circle");
+          }}
+        ></IconButton>
+        <IconButton
+          activated={selectedTool === "line"}
+          icon={<Minus />}
+          onClick={() => {
+            setSelectedTool("line");
           }}
         ></IconButton>
       </div>

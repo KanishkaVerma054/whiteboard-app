@@ -20,6 +20,13 @@ type Shape = {
       startY: number;
       endX: number;
       endY: number;
+    }
+  | {
+      type: "line";
+      startX: number;
+      startY: number;
+      endX: number;
+      endY: number;
     };
 
 export class Game {
@@ -53,7 +60,7 @@ export class Game {
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
   }
 
-  setTool(tool: "circle" | "pencil" | "rect") {
+  setTool(tool: "circle" | "pencil" | "rect" | "line") {
     this.selectedTool = tool;
   }
 
@@ -83,6 +90,7 @@ export class Game {
       if (shape.type === "rect") {
         this.ctx.strokeStyle = "rgba(255, 255, 255)";
         this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
+
       } else if (shape.type === "circle") {
         this.ctx.beginPath();
         this.ctx.arc(
@@ -94,6 +102,14 @@ export class Game {
         );
         this.ctx.closePath();
         this.ctx.stroke();
+
+      } 
+      else if (shape.type === "line") {
+        this.ctx.beginPath()
+        this.ctx.moveTo(shape.startX, shape.startY)
+        this.ctx.lineTo(shape.endX, shape.endY)
+        this.ctx.stroke()
+        // this.ctx.lineTo( shape.endX, shape.endY)
       }
     });
   }
@@ -128,7 +144,16 @@ export class Game {
         centerX: this.startX + radius,
         centerY: this.startY + radius,
       };
-    }
+    } 
+    else if (selectedTool === "line") {
+      shape = {
+        type: "line",
+        startX: this.startX,
+        startY: this.startY,
+        endX : e.clientX,
+        endY : e.clientY,
+      }  
+    } 
     if (!shape) {
       return;
     }
@@ -164,6 +189,12 @@ mouseMoveHandler = (e: MouseEvent) => {
             this.ctx.arc(centerX, centerY, Math.abs(radius), 0, Math.PI * 2);
             this.ctx.closePath();
             this.ctx.stroke();
+        } 
+        else if (selectedTool === "line") {
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.startX, this.startY);
+            this.ctx.lineTo(e.clientX, e.clientY);
+            this.ctx.stroke()
         }
     }
 }
