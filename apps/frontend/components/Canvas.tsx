@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { Circle, Minus, Pencil, RectangleHorizontalIcon } from "lucide-react";
+import { Circle, Minus, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
 import { Game } from "@/app/draw/Game";
 import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
-export type Tool = "circle" | "rect" | "pencil" | "line";
+export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle";
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -94,6 +94,13 @@ function Topbar({
           icon={<Minus />}
           onClick={() => {
             setSelectedTool("line");
+          }}
+        ></IconButton>
+        <IconButton
+          activated={selectedTool === "triangle"}
+          icon={<Triangle />}
+          onClick={() => {
+            setSelectedTool("triangle");
           }}
         ></IconButton>
       </div>
