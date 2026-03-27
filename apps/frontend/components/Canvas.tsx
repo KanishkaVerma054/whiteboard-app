@@ -5,6 +5,8 @@ import { Game } from "@/app/draw/Game";
 import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
+
+
 export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle";
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
