@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { Circle, Diamond, Minus, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
+import { Circle, Diamond, Minus, MoveRight, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
 import { Game } from "@/app/draw/Game";
 import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
 
 
-export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond";
+export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow";
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -110,6 +110,13 @@ function Topbar({
           icon={<Diamond />}
           onClick={() => {
             setSelectedTool("diamond");
+          }}
+        ></IconButton>
+        <IconButton
+          activated={selectedTool === "arrow"}
+          icon={<MoveRight />}
+          onClick={() => {
+            setSelectedTool("arrow");
           }}
         ></IconButton>
       </div>

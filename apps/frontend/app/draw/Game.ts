@@ -43,6 +43,13 @@ type Shape =
       y: number;
       width: number;
       height: number;
+    } 
+  | {
+      type: "arrow";
+      x: number;
+      y: number;
+      toX: number;
+      toY: number;
     };
 
 export class Game {
@@ -53,7 +60,7 @@ export class Game {
   private clicked: boolean;
   private startX = 0;
   private startY = 0;
-  private selectedTool: Tool = "circle";
+  private selectedTool: Tool = "arrow";
   private currentPencilStroke: { x: number; y: number }[] = [];
   socket: WebSocket;
 
@@ -77,7 +84,7 @@ export class Game {
   }
 
   setTool(
-    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond"
+    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow"
   ) {
     this.selectedTool = tool;
   }
@@ -154,6 +161,8 @@ export class Game {
         }
       } else if (shape.type === "diamond") {
         this.DiamondShape(shape.x, shape.y, shape.width, shape.height);
+      } else if (shape.type === "arrow") {
+        this.ArrowShape(shape.x, shape.y, shape.toX, shape.toY);
       }
     });
   }
@@ -240,6 +249,14 @@ export class Game {
         y: cy,
         width: width,
         height: height
+      }
+    } else if (selectedTool === "arrow") {
+      shape = {
+        type: "arrow",
+        x: this.startX,
+        y: this.startY,
+        toX: e.clientX,
+        toY: e.clientY
       }
     }
 
@@ -336,6 +353,8 @@ export class Game {
         const width = Math.abs(dx);
         const height = Math.abs(dy);
         this.DiamondShape(cx, cy, width, height);
+      } else if (selectedTool === "arrow") {
+        this.ArrowShape(this.startX, this.startY, e.clientX, e.clientY)
       }
     }
   };
@@ -370,6 +389,26 @@ export class Game {
     this.ctx.lineTo(bottomX, bottomY);
     this.ctx.lineTo(leftX, leftY);
     this.ctx.closePath();
+    this.ctx.stroke();
+  }
+
+  ArrowShape(fromX: number, fromY: number, toX: number, toY: number) {
+    var arrowHeadAngle = Math.atan2(toY-fromY, toX-fromX)
+    var ARROW_HEAD_LENGTH = 10;
+
+    const arrowLength = ARROW_HEAD_LENGTH
+
+    const arrowX1 = toX - arrowLength * Math.cos(arrowHeadAngle - Math.PI / 6)
+    const arrowY1 = toY - arrowLength * Math.sin(arrowHeadAngle - Math.PI / 6)
+    const arrowX2 = toX - arrowLength * Math.cos(arrowHeadAngle + Math.PI / 6)
+    const arrowY2 = toY - arrowLength * Math.sin(arrowHeadAngle + Math.PI / 6)
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(fromX, fromY);
+    this.ctx.lineTo(toX, toY);
+    this.ctx.lineTo(arrowX1, arrowY1);
+    this.ctx.moveTo(toX, toY);
+    this.ctx.lineTo(arrowX2, arrowY2);
     this.ctx.stroke();
   }
 }
