@@ -1,5 +1,6 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
+import { Shapes, X } from "lucide-react";
 
 type Shape =
   | {
@@ -36,6 +37,13 @@ type Shape =
       y: number;
       side: number; // side of equilatral triangle
     }
+  | {
+      type: "diamond";
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
 
 export class Game {
   private canvas: HTMLCanvasElement;
@@ -46,7 +54,7 @@ export class Game {
   private startX = 0;
   private startY = 0;
   private selectedTool: Tool = "circle";
-  private currentPencilStroke: { x: number; y:number }[] = []
+  private currentPencilStroke: { x: number; y: number }[] = [];
   socket: WebSocket;
 
   constructor(canvas: HTMLCanvasElement, roomId: string, socket: WebSocket) {
@@ -68,7 +76,9 @@ export class Game {
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
   }
 
-  setTool(tool: "circle" | "pencil" | "rect" | "line" | "triangle") {
+  setTool(
+    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond"
+  ) {
     this.selectedTool = tool;
   }
 
@@ -100,7 +110,6 @@ export class Game {
 
     // Redraws Existing Shapes
     this.existingShapes.map((shape) => {
-
       // Drawing logic of each shape type
       if (shape.type === "rect") {
         this.ctx.strokeStyle = "rgba(255, 255, 255)";
@@ -134,28 +143,30 @@ export class Game {
         this.ctx.closePath();
         this.ctx.stroke();
       } else if (shape.type === "pencil" && Array.isArray(shape.points)) {
-        if(shape.points && shape.points.length > 1){
+        if (shape.points && shape.points.length > 1) {
           this.ctx.beginPath();
           this.ctx.moveTo(shape.points[0].x, shape.points[0].y);
-          shape.points.forEach(point => {
+          shape.points.forEach((point) => {
             this.ctx.lineTo(point.x, point.y);
           });
           this.ctx.stroke();
           // this.ctx.closePath();
         }
-      } 
+      } else if (shape.type === "diamond") {
+        this.DiamondShape(shape.x, shape.y, shape.width, shape.height);
+      }
     });
   }
 
   // mouseDownHandler: User presses the mouse button; shapes begin to draw; Records where the user started to clicking
   mouseDownHandler = (e: MouseEvent) => {
     this.clicked = true;
-    
+
     this.startX = e.clientX;
     this.startY = e.clientY;
 
     if (this.selectedTool === "pencil") {
-      this.currentPencilStroke = [{x: this.startX, y: this.startY}]
+      this.currentPencilStroke = [{ x: this.startX, y: this.startY }];
     }
   };
 
@@ -166,7 +177,7 @@ export class Game {
     const height = e.clientY - this.startY;
 
     const selectedTool = this.selectedTool;
-    let shape: Shape | null = null; 
+    let shape: Shape | null = null;
     if (selectedTool === "rect") {
       shape = {
         type: "rect",
@@ -176,11 +187,11 @@ export class Game {
         width,
       };
     } else if (selectedTool === "circle") {
-      const dx = e.clientX - this.startX // difference between the the mouse movement started and the current mouse position in x-axis
-      const dy = e.clientY - this.startY
+      const dx = e.clientX - this.startX; // difference between the the mouse movement started and the current mouse position in x-axis
+      const dy = e.clientY - this.startY;
 
-      const calradiusX = Math.abs(dx / 2) // cal. radius of x
-      const calradiusY = Math.abs(dy / 2) // cal. radius of y
+      const calradiusX = Math.abs(dx / 2); // cal. radius of x
+      const calradiusY = Math.abs(dy / 2); // cal. radius of y
       shape = {
         type: "circle",
         x: this.startX + dx / 2,
@@ -204,12 +215,32 @@ export class Game {
         y: this.startY,
         side: triSide,
       };
-    } else if (selectedTool === "pencil" && this.currentPencilStroke.length > 1) {
+    } else if (
+      selectedTool === "pencil" &&
+      this.currentPencilStroke.length > 1
+    ) {
       shape = {
         type: "pencil",
         points: this.currentPencilStroke,
       };
       this.currentPencilStroke = [];
+    } else if (selectedTool === "diamond") {
+      const dx = e.clientX - this.startX;
+      const dy = e.clientY - this.startY;
+
+      // center of the diamond from where the drag happens
+      const cx = this.startX + dx/2;
+      const cy = this.startY + dy/2;
+
+      const width = Math.abs(dx);
+      const height = Math.abs(dy);
+      shape = {
+        type: "diamond",
+        x: cx,
+        y: cy,
+        width: width,
+        height: height
+      }
     }
 
     if (!shape) {
@@ -255,7 +286,15 @@ export class Game {
 
         this.ctx.beginPath();
         // this.ctx.ellipse(centerX, centerY, Math.abs(radius), 0, Math.PI * 2);
-        this.ctx.ellipse(x, y, Math.abs(radiusX), Math.abs(radiusY), 0, 0, Math.PI * 2);
+        this.ctx.ellipse(
+          x,
+          y,
+          Math.abs(radiusX),
+          Math.abs(radiusY),
+          0,
+          0,
+          Math.PI * 2
+        );
         this.ctx.closePath();
         this.ctx.stroke();
       } else if (selectedTool === "line") {
@@ -275,15 +314,29 @@ export class Game {
         this.ctx.closePath();
         this.ctx.stroke();
       } else if (selectedTool === "pencil") {
-        this.currentPencilStroke.push({x: e.clientX, y: e.clientY})
+        this.currentPencilStroke.push({ x: e.clientX, y: e.clientY });
         this.ctx.beginPath();
-        this.ctx.moveTo(this.currentPencilStroke[0].x, this.currentPencilStroke[0].y);
-        this.currentPencilStroke.forEach(point => {
+        this.ctx.moveTo(
+          this.currentPencilStroke[0].x,
+          this.currentPencilStroke[0].y
+        );
+        this.currentPencilStroke.forEach((point) => {
           this.ctx.lineTo(point.x, point.y);
-        })
+        });
         this.ctx.stroke();
         // this.ctx.closePath();
-      } 
+      } else if (selectedTool === "diamond") {
+        const dx = e.clientX - this.startX;
+        const dy = e.clientY - this.startY;
+
+        // center point calculation
+        const cx = this.startX + dx/2;
+        const cy = this.startY + dy/2;
+
+        const width = Math.abs(dx);
+        const height = Math.abs(dy);
+        this.DiamondShape(cx, cy, width, height);
+      }
     }
   };
 
@@ -291,5 +344,32 @@ export class Game {
     this.canvas.addEventListener("mousedown", this.mouseDownHandler);
     this.canvas.addEventListener("mouseup", this.mouseUpHandler);
     this.canvas.addEventListener("mousemove", this.mouseMoveHandler);
+  }
+
+  // TODO:-----------Shape Logic...will be moved to saperate file later on----------------
+
+  DiamondShape(centerX: number, centerY: number, width: number, height: number) {
+    const halfWidth = width/2;
+    const halfHeight = height/2;
+    
+    const topX = centerX
+    const topY = centerY - halfHeight;
+
+    const rightX = centerX + halfWidth;
+    const rightY = centerY;
+
+    const bottomX = centerX;
+    const bottomY = centerY + halfHeight;
+
+    const leftX = centerX - halfWidth;
+    const leftY = centerY;
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(topX, topY);
+    this.ctx.lineTo(rightX, rightY);
+    this.ctx.lineTo(bottomX, bottomY);
+    this.ctx.lineTo(leftX, leftY);
+    this.ctx.closePath();
+    this.ctx.stroke();
   }
 }
