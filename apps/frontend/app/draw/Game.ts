@@ -1,6 +1,7 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { Shapes, X } from "lucide-react";
+import { RectangleEllipsis } from "lucide-react";
+import { CANVAS_STORAGE_KEY, VIEWPORT_SECRET_KEY } from "@/types/types";
 
 type Shape =
   | {
@@ -58,19 +59,28 @@ export class Game {
   private existingShapes: Shape[];
   private roomId: string;
   private clicked: boolean;
-  private startX = 0;
-  private startY = 0;
+  private startX: number = 0;
+  private startY: number = 0;
+  private panX: number = 0;
+  private panY: number = 0;
+  private scale: number = 1;
+  private onScaleChangeCallback: (scale: number) => void;
+  // private outputScale: number = 1
+  private saveViewportTimeout: ReturnType<typeof setTimeout> | null = null // // Holds the pending debounce timer's id, so a new pan/zoom event can cancel the previous scheduled save
+  private isStandalone: boolean = false;
   private selectedTool: Tool = "arrow";
+  // private selectedShapeIndex : number | null = null; // bounding box (later)
   private currentPencilStroke: { x: number; y: number }[] = [];
   socket: WebSocket;
 
-  constructor(canvas: HTMLCanvasElement, roomId: string, socket: WebSocket) {
+  constructor(canvas: HTMLCanvasElement, roomId: string, socket: WebSocket, onScaleChangeCallback: (scale: number) => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.existingShapes = [];
     this.roomId = roomId;
     this.socket = socket;
     this.clicked = false;
+    this.onScaleChangeCallback = onScaleChangeCallback;
     this.init();
     this.initHandlers();
     this.initMouseHandlers();
@@ -81,16 +91,44 @@ export class Game {
 
     this.canvas.removeEventListener("mouseup", this.mouseUpHandler);
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
+
+    this.canvas.removeEventListener("wheel", this.mouseWheelHandler)
   }
 
   setTool(
-    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow"
+    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab"
   ) {
     this.selectedTool = tool;
   }
 
   async init() {
     this.existingShapes = await getExistingShapes(this.roomId);
+
+    if (this.isStandalone) {
+      try {
+        const storedShapes = localStorage.getItem(CANVAS_STORAGE_KEY)
+        if (storedShapes) {
+          const parsedData = JSON.parse(storedShapes);
+          this.existingShapes = [...this.existingShapes, ...parsedData]
+        }
+      } catch(e) {
+        console.error("Error loading shapes from localStorage: ", e)
+      }
+    }
+
+    try {
+      const storedViewport = localStorage.getItem(this.viewportStorageKey())
+      if (storedViewport) {
+        const { panX, panY, scale } = JSON.parse(storedViewport)
+        this.panX = panX;
+        this.panY = panY;
+        this.scale = scale;
+        this.onScaleChange(this.scale)
+      }
+    } catch (e) {
+      console.error("Error loading viewport from localStorage:", e);
+    }
+
     this.clearCanvas();
   }
 
@@ -109,11 +147,26 @@ export class Game {
   // ClearCanvas(){} -> Clears everything; Redraws the permanent shapes; Draw the current preview shape
   clearCanvas() {
     // Clears the entire canvas:
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    // this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+    // panning and zooming using setTransform()
+    this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY)
+    this.ctx.clearRect(
+      -this.panX/this.scale,
+      -this.panY/this.scale,
+      this.canvas.width/this.scale,
+      this.canvas.height/this.scale
+    )
 
     // Sets the background to black:
     this.ctx.fillStyle = "rgba(0, 0, 0)";
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    // this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.ctx.fillRect(
+      -this.panX/this.scale,
+      -this.panY/this.scale,
+      this.canvas.width/this.scale,
+      this.canvas.height/this.scale
+    );
 
     // Redraws Existing Shapes
     this.existingShapes.map((shape) => {
@@ -169,10 +222,22 @@ export class Game {
 
   // mouseDownHandler: User presses the mouse button; shapes begin to draw; Records where the user started to clicking
   mouseDownHandler = (e: MouseEvent) => {
+    const {x, y} = this.transformScreenToWorld(e.clientX, e.clientY)
     this.clicked = true;
 
-    this.startX = e.clientX;
-    this.startY = e.clientY;
+    // this.startX = e.clientX;
+    // this.startY = e.clientY;
+
+    this.startX = x;
+    this.startY = y;
+
+    if(this.selectedTool === "grab") {
+      // grab tool stores raw client coords, not world coords —
+      // the mousemove handler re-derives world coords from these each frame
+
+      this.startX = e.clientX;
+      this.startY = e.clientY;
+    }
 
     if (this.selectedTool === "pencil") {
       this.currentPencilStroke = [{ x: this.startX, y: this.startY }];
@@ -182,8 +247,9 @@ export class Game {
   // mouseUpHandler: When user release the mouse button, it finalizes the shape and saves it permanently
   mouseUpHandler = (e: MouseEvent) => {
     this.clicked = false;
-    const width = e.clientX - this.startX;
-    const height = e.clientY - this.startY;
+    const { x: endX, y: endY } = this.transformScreenToWorld(e.clientX, e.clientY);
+    const width = endX - this.startX;
+    const height = endY - this.startY;
 
     const selectedTool = this.selectedTool;
     let shape: Shape | null = null;
@@ -196,8 +262,8 @@ export class Game {
         width,
       };
     } else if (selectedTool === "circle") {
-      const dx = e.clientX - this.startX; // difference between the the mouse movement started and the current mouse position in x-axis
-      const dy = e.clientY - this.startY;
+      const dx = endX - this.startX; // difference between the the mouse movement started and the current mouse position in x-axis
+      const dy = endY - this.startY;
 
       const calradiusX = Math.abs(dx / 2); // cal. radius of x
       const calradiusY = Math.abs(dy / 2); // cal. radius of y
@@ -213,8 +279,8 @@ export class Game {
         type: "line",
         startX: this.startX,
         startY: this.startY,
-        endX: e.clientX,
-        endY: e.clientY,
+        endX,
+        endY,
       };
     } else if (selectedTool === "triangle") {
       const triSide = Math.max(width, height);
@@ -234,8 +300,8 @@ export class Game {
       };
       this.currentPencilStroke = [];
     } else if (selectedTool === "diamond") {
-      const dx = e.clientX - this.startX;
-      const dy = e.clientY - this.startY;
+      const dx = endX - this.startX;
+      const dy = endY - this.startY;
 
       // center of the diamond from where the drag happens
       const cx = this.startX + dx/2;
@@ -255,8 +321,8 @@ export class Game {
         type: "arrow",
         x: this.startX,
         y: this.startY,
-        toX: e.clientX,
-        toY: e.clientY
+        toX: endX,
+        toY: endY
       }
     }
 
@@ -280,13 +346,16 @@ export class Game {
   // mouseMoveHandler: While user drag the mouse it shows live preview of the shape.
   mouseMoveHandler = (e: MouseEvent) => {
     if (this.clicked) {
-      const width = e.clientX - this.startX;
-      const height = e.clientY - this.startY;
+      const selectedTool: Tool = this.selectedTool;
+      const { x: curX, y: curY } =
+        selectedTool === "grab"
+          ? { x: e.clientX, y: e.clientY }
+          : this.transformScreenToWorld(e.clientX, e.clientY);
+      const width = curX - this.startX;
+      const height = curY - this.startY;
       this.clearCanvas();
 
       this.ctx.strokeStyle = "rgba(255, 255, 255)";
-
-      const selectedTool: Tool = this.selectedTool;
 
       if (selectedTool === "rect") {
         this.ctx.strokeRect(this.startX, this.startY, width, height);
@@ -294,8 +363,8 @@ export class Game {
         // const radius = Math.max(width, height) / 2;
         // const centerX = this.startX + radius;
         // const centerY = this.startY + radius;
-        const dx = e.clientX - this.startX;
-        const dy = e.clientY - this.startY;
+        const dx = curX - this.startX;
+        const dy = curY - this.startY;
         const radiusX = Math.abs(dx / 2);
         const radiusY = Math.abs(dy / 2);
         const x = this.startX + dx / 2;
@@ -317,7 +386,7 @@ export class Game {
       } else if (selectedTool === "line") {
         this.ctx.beginPath();
         this.ctx.moveTo(this.startX, this.startY);
-        this.ctx.lineTo(e.clientX, e.clientY);
+        this.ctx.lineTo(curX, curY);
         this.ctx.stroke();
       } else if (selectedTool === "triangle") {
         this.ctx.beginPath();
@@ -331,7 +400,7 @@ export class Game {
         this.ctx.closePath();
         this.ctx.stroke();
       } else if (selectedTool === "pencil") {
-        this.currentPencilStroke.push({ x: e.clientX, y: e.clientY });
+        this.currentPencilStroke.push({ x: curX, y: curY });
         this.ctx.beginPath();
         this.ctx.moveTo(
           this.currentPencilStroke[0].x,
@@ -343,8 +412,8 @@ export class Game {
         this.ctx.stroke();
         // this.ctx.closePath();
       } else if (selectedTool === "diamond") {
-        const dx = e.clientX - this.startX;
-        const dy = e.clientY - this.startY;
+        const dx = curX - this.startX;
+        const dy = curY - this.startY;
 
         // center point calculation
         const cx = this.startX + dx/2;
@@ -354,24 +423,69 @@ export class Game {
         const height = Math.abs(dy);
         this.DiamondShape(cx, cy, width, height);
       } else if (selectedTool === "arrow") {
-        this.ArrowShape(this.startX, this.startY, e.clientX, e.clientY)
+        this.ArrowShape(this.startX, this.startY, curX, curY)
+      } else if (this.clicked && selectedTool === "grab") {
+        
+        const {x: trasformedX, y: transformedY} = this.transformScreenToWorld(e.clientX, e.clientY)
+        const {x: startTransformedX, y: startTransformedY} = this.transformScreenToWorld(this.startX, this.startY)
+
+        const deltaX = trasformedX - startTransformedX;
+        const deltaY = transformedY - startTransformedY;
+
+        this.panX += deltaX * this.scale;
+        this.panY += deltaY * this.scale;
+        this.startX = e.clientX;
+        this.startY = e.clientY;
+
+        this.saveViewport() // for saving to localstorage
+
+        this.clearCanvas()
       }
     }
   };
 
+  mouseWheelHandler = (e: WheelEvent) => {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      // zoom
+      const scaleAmount = -e.deltaY/200 // for scrollling "up" // -ve deltaY means zoom in
+      const newScale = this.scale * (1 + scaleAmount)
+
+      const mouseX = e.clientX - this.canvas.offsetLeft
+      const mouseY = e.clientY - this.canvas.offsetTop
+
+      const worldX = (mouseX-this.panX)/this.scale;
+      const worldY = (mouseY-this.panY)/this.scale;
+
+      this.panX -= worldX * (newScale - this.scale)
+      this.panY -= worldY * (newScale - this.scale)
+
+      this.scale = newScale
+      this.onScaleChange(this.scale)
+      this.saveViewport() // for saving to localstorage
+    } else {
+      // pan
+      this.panX -= e.deltaX,
+      this.panY -= e.deltaY
+      this.saveViewport() // for saving to localstorage
+    }
+    this.clearCanvas()
+  }
+
   initMouseHandlers() {
-    this.canvas.addEventListener("mousedown", this.mouseDownHandler);
     this.canvas.addEventListener("mouseup", this.mouseUpHandler);
+    this.canvas.addEventListener("mousedown", this.mouseDownHandler);
     this.canvas.addEventListener("mousemove", this.mouseMoveHandler);
+    this.canvas.addEventListener("wheel", this.mouseWheelHandler, {passive: false});
   }
 
   // TODO:-----------Shape Logic...will be moved to saperate file later on----------------
 
   DiamondShape(centerX: number, centerY: number, width: number, height: number) {
-    const halfWidth = width/2;
-    const halfHeight = height/2;
+    const halfWidth = width / 2;
+    const halfHeight = height / 2;
     
-    const topX = centerX
+    const topX = centerX;
     const topY = centerY - halfHeight;
 
     const rightX = centerX + halfWidth;
@@ -410,5 +524,59 @@ export class Game {
     this.ctx.moveTo(toX, toY);
     this.ctx.lineTo(arrowX2, arrowY2);
     this.ctx.stroke();
+  }
+
+  //----------------------------Panning and Zooming-----------------------------------------------
+
+  transformScreenToWorld(clientX: number, clientY: number): {x: number; y: number} {
+    const rect = this.canvas.getBoundingClientRect();
+    const x = (clientX - rect.left - this.panX)/this.scale;
+    const y = (clientY - rect.top - this.panY)/this.scale;
+    return {x, y};
+  };
+
+  setScale(newScale: number) {
+    const rect = this.canvas.getBoundingClientRect();
+    
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    this.panX -= centerX * (newScale - this.scale);
+    this.panY -= centerY * (newScale - this.scale);
+
+    this.scale = newScale
+    this.onScaleChange(this.scale)
+    this.saveViewport() // for saving to localstorage
+    this.clearCanvas()
+  }
+
+  onScaleChange(scale: number) {
+    // this.outputScale = scale;
+    // if (this.onScaleChangeCallback) {
+    //   this.onScaleChangeCallback(scale)
+    // }
+    this.onScaleChangeCallback?.(scale);
+  }
+  
+  //----------------------------Bounding Box-----------------------------------------------
+  
+  // Builds a per-room storage key so switching rooms doesn't leak one room's saved camera position into another's
+  private viewportStorageKey(): string {
+    return `${VIEWPORT_SECRET_KEY}${this.roomId}`;
+  }
+  
+  // Debounced write of panX/panY/scale to localStorage — only persists once pan/zoom activity pauses for 150ms
+  private saveViewport() {
+    if(this.saveViewportTimeout) clearTimeout(this.saveViewportTimeout) // cancel any pending save
+    this.saveViewportTimeout = setTimeout(() => { // schedule a new one, remember its handle
+      try {
+        localStorage.setItem(
+          this.viewportStorageKey(),
+          JSON.stringify({panX: this.panX, panY: this.panY, scale: this.scale})
+        )
+      } catch (e) {
+        console.error("Error saving viewport to localStorage:", e)
+      }
+    }, 150)
   }
 }

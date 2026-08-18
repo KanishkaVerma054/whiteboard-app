@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { Circle, Diamond, Minus, MoveRight, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
+import { Circle, Diamond, Hand, Minus, MoveRight, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
 import { Game } from "@/app/draw/Game";
 import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
 
 
-export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow";
+export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab";
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [game, setGame] = useState<Game>();
   const [selectedTool, setSelectedTool] = useState<Tool>("circle");
   const { width, height } = useWindowSize();
+  const [scale,  setScale] = useState(1);
 
 
   useEffect(() => {
@@ -22,7 +23,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
 
   useEffect(() => {
     if (canvasRef.current) {
-      const g = new Game(canvasRef.current, roomId, socket);
+      const g = new Game(canvasRef.current, roomId, socket, setScale );
       setGame(g);
 
       return () => {
@@ -54,6 +55,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
         width={width}
         height={height}
         // height={window.innerHeight}
+        className={selectedTool === "grab" ? "cursor-grab" : "cursor-crosshair"}
       ></canvas>
       <Topbar setSelectedTool={setSelectedTool} selectedTool={selectedTool} />
     </div>
@@ -117,6 +119,14 @@ function Topbar({
           icon={<MoveRight />}
           onClick={() => {
             setSelectedTool("arrow");
+          }}
+        ></IconButton>
+        <IconButton
+          
+          activated={selectedTool === "grab"}
+          icon={<Hand />}
+          onClick={() => {
+            setSelectedTool("grab");
           }}
         ></IconButton>
       </div>
