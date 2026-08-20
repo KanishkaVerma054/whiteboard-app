@@ -91,15 +91,17 @@ wss.on("connection", function connection(ws, request) {
 
       const roomId = parsedData.roomId;
       const message = parsedData.message;
-      
+      const shapeId = parsedData.shapeId;
+
       //TODO: Push over to queue; lecture: chess video
-      
+
       try {
         await prismaClient.chat.create({
             data: {
                 roomId: Number(roomId),
                 message,
-                userId
+                userId,
+                shapeId
             }
         })
 
@@ -123,12 +125,83 @@ wss.on("connection", function connection(ws, request) {
             })
         )
       }
-      
 
-      
+
+
 
       //TODO: fix: we are not persisting things to the database,
       // TODO: THIS SHOULD BE FIXED: there is no auth(anyone can send messages to any room e.g. I subscribe to room1 but sending message to room2)
+    }
+
+    // Persists an edited (moved/resized) shape by overwriting the Chat row that owns its shapeId,
+    // instead of inserting a new row — keeps the shape's history as one row, not a duplicate.
+    if (parsedData.type === "shape_update") {
+      const roomId = parsedData.roomId;
+      const message = parsedData.message;
+      const shapeId = parsedData.shapeId;
+
+      if (!shapeId) return;
+
+      try {
+        const updated = await prismaClient.chat.updateMany({
+          where: { roomId: Number(roomId), shapeId },
+          data: { message },
+        });
+
+        if (updated.count === 0) return; // unknown shapeId — nothing to update
+
+        users.forEach((user) => {
+          if (user.rooms.includes(roomId)) {
+            user.ws.send(
+              JSON.stringify({
+                type: "shape_update",
+                message,
+                shapeId,
+                roomId,
+              })
+            );
+          }
+        });
+      } catch (error) {
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            message: "Failed to update shape. Please try again.",
+          })
+        );
+      }
+    }
+
+    if (parsedData.type === "shape_delete") {
+      const roomId = parsedData.roomId;
+      const shapeId = parsedData.shapeId;
+
+      if (!shapeId) return;
+
+      try {
+        await prismaClient.chat.deleteMany({
+          where: { roomId: Number(roomId), shapeId },
+        });
+
+        users.forEach((user) => {
+          if (user.rooms.includes(roomId)) {
+            user.ws.send(
+              JSON.stringify({
+                type: "shape_delete",
+                shapeId,
+                roomId,
+              })
+            );
+          }
+        });
+      } catch (error) {
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            message: "Failed to delete shape. Please try again.",
+          })
+        );
+      }
     }
   });
 });

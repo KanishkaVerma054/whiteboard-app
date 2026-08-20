@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { Circle, Diamond, Hand, Minus, MoveRight, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
+import { Circle, Diamond, Hand, Minus, MousePointer2, MoveRight, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
 import { Game } from "@/app/draw/Game";
 import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
 
 
-export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab";
+export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select";
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,7 +55,13 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
         width={width}
         height={height}
         // height={window.innerHeight}
-        className={selectedTool === "grab" ? "cursor-grab" : "cursor-crosshair"}
+        className={
+          selectedTool === "grab"
+            ? "cursor-grab"
+            : selectedTool === "select"
+            ? "cursor-default"
+            : "cursor-crosshair"
+        }
       ></canvas>
       <Topbar setSelectedTool={setSelectedTool} selectedTool={selectedTool} />
     </div>
@@ -72,6 +78,13 @@ function Topbar({
   return (
     <div className="fixed top-[10px] left-[10px]">
       <div className="flex gap-2">
+        <IconButton
+          activated={selectedTool === "select"}
+          icon={<MousePointer2 />}
+          onClick={() => {
+            setSelectedTool("select");
+          }}
+        ></IconButton>
         <IconButton
           activated={selectedTool === "pencil"}
           icon={<Pencil />}

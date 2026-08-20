@@ -2,8 +2,15 @@ import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
 import { RectangleEllipsis } from "lucide-react";
 import { CANVAS_STORAGE_KEY, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { SelectionLogic, type HandleName } from "./SelectionLogic";
 
-type Shape =
+const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
+const HIT_TEST_PADDING = 6; // px, generous click target for thin shapes like line/arrow
+
+// `id` mirrors the owning Chat row's `shapeId` — how the backend finds this shape again to
+// persist a move/resize/delete. Every shape, old or new, is guaranteed to have one (see
+// getExistingShapes in http.ts and the backfill of legacy rows).
+export type Shape = { id: string } & (
   | {
       type: "rect";
       x: number;
@@ -44,14 +51,35 @@ type Shape =
       y: number;
       width: number;
       height: number;
-    } 
+    }
   | {
       type: "arrow";
       x: number;
       y: number;
       toX: number;
       toY: number;
-    };
+    }
+);
+
+const KNOWN_SHAPE_TYPES = new Set<Shape["type"]>([
+  "rect",
+  "circle",
+  "pencil",
+  "line",
+  "triangle",
+  "diamond",
+  "arrow",
+]);
+
+// Guards against legacy/malformed rows from the backend (e.g. an old, since-removed tool's
+// leftover data) or a garbage message from another client — anything not a currently-known shape.
+function isKnownShape(shape: unknown): shape is Shape {
+  return (
+    !!shape &&
+    typeof shape === "object" &&
+    KNOWN_SHAPE_TYPES.has((shape as { type?: string }).type as Shape["type"])
+  );
+}
 
 export class Game {
   private canvas: HTMLCanvasElement;
@@ -69,7 +97,10 @@ export class Game {
   private saveViewportTimeout: ReturnType<typeof setTimeout> | null = null // // Holds the pending debounce timer's id, so a new pan/zoom event can cancel the previous scheduled save
   private isStandalone: boolean = false;
   private selectedTool: Tool = "arrow";
-  // private selectedShapeIndex : number | null = null; // bounding box (later)
+  private selectedShapeIndex: number | null = null;
+  private isDraggingShape: boolean = false;
+  private activeHandle: HandleName | null = null;
+  private resizeAnchor: { x: number; y: number } | null = null;
   private currentPencilStroke: { x: number; y: number }[] = [];
   socket: WebSocket;
 
@@ -84,6 +115,7 @@ export class Game {
     this.init();
     this.initHandlers();
     this.initMouseHandlers();
+    window.addEventListener("keydown", this.keyDownHandler);
   }
 
   destroy() {
@@ -93,12 +125,43 @@ export class Game {
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
 
     this.canvas.removeEventListener("wheel", this.mouseWheelHandler)
+    window.removeEventListener("keydown", this.keyDownHandler);
   }
 
+  // Delete/Backspace removes the selected shape (and broadcasts the delete); Escape clears the selection.
+  keyDownHandler = (e: KeyboardEvent) => {
+    if (this.selectedTool !== "select" || this.selectedShapeIndex === null) return;
+
+    if (e.key === "Delete" || e.key === "Backspace") {
+      const shape = this.existingShapes[this.selectedShapeIndex];
+      this.existingShapes.splice(this.selectedShapeIndex, 1);
+      this.selectedShapeIndex = null;
+      this.clearCanvas();
+
+      this.socket.send(
+        JSON.stringify({
+          type: "shape_delete",
+          shapeId: shape.id,
+          roomId: this.roomId,
+        })
+      );
+    } else if (e.key === "Escape") {
+      this.selectedShapeIndex = null;
+      this.clearCanvas();
+    }
+  };
+
   setTool(
-    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab"
+    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select"
   ) {
+    if (tool !== "select") {
+      this.selectedShapeIndex = null;
+      this.activeHandle = null;
+      this.resizeAnchor = null;
+      this.isDraggingShape = false;
+    }
     this.selectedTool = tool;
+    this.clearCanvas();
   }
 
   async init() {
@@ -115,6 +178,8 @@ export class Game {
         console.error("Error loading shapes from localStorage: ", e)
       }
     }
+
+    this.existingShapes = this.existingShapes.filter(isKnownShape);
 
     try {
       const storedViewport = localStorage.getItem(this.viewportStorageKey())
@@ -138,8 +203,31 @@ export class Game {
 
       if (message.type == "chat") {
         const parsedShape = JSON.parse(message.message);
-        this.existingShapes.push(parsedShape.shape);
-        this.clearCanvas();
+        if (isKnownShape(parsedShape.shape)) {
+          this.existingShapes.push(parsedShape.shape);
+          this.clearCanvas();
+        }
+      } else if (message.type === "shape_update") {
+        const parsed = JSON.parse(message.message);
+        if (isKnownShape(parsed.shape)) {
+          const index = this.existingShapes.findIndex((s) => s.id === message.shapeId);
+          if (index !== -1) {
+            this.existingShapes[index] = parsed.shape;
+            this.clearCanvas();
+          }
+        }
+      } else if (message.type === "shape_delete") {
+        const index = this.existingShapes.findIndex((s) => s.id === message.shapeId);
+        if (index !== -1) {
+          this.existingShapes.splice(index, 1);
+          if (this.selectedShapeIndex === index) {
+            this.selectedShapeIndex = null;
+          } else if (this.selectedShapeIndex !== null && this.selectedShapeIndex > index) {
+            // keep pointing at the same shape after the splice shifts everything after it down by one
+            this.selectedShapeIndex -= 1;
+          }
+          this.clearCanvas();
+        }
       }
     };
   }
@@ -218,6 +306,32 @@ export class Game {
         this.ArrowShape(shape.x, shape.y, shape.toX, shape.toY);
       }
     });
+
+    if (this.selectedShapeIndex !== null && this.existingShapes[this.selectedShapeIndex]) {
+      this.drawSelectionOutline(this.existingShapes[this.selectedShapeIndex]);
+    }
+  }
+
+  private drawSelectionOutline(shape: Shape) {
+    const box = SelectionLogic.getBoundingBox(shape);
+
+    this.ctx.save();
+    this.ctx.setLineDash([4 / this.scale, 4 / this.scale]);
+    this.ctx.lineWidth = 1 / this.scale;
+    this.ctx.strokeStyle = "rgba(56, 161, 255, 0.9)";
+    this.ctx.strokeRect(box.x, box.y, box.width, box.height);
+    this.ctx.restore();
+
+    const handleSize = HANDLE_SCREEN_SIZE / this.scale;
+    this.ctx.save();
+    this.ctx.fillStyle = "rgba(56, 161, 255, 1)";
+    this.ctx.strokeStyle = "white";
+    this.ctx.lineWidth = 1 / this.scale;
+    Object.values(SelectionLogic.getHandlePositions(box)).forEach((h) => {
+      this.ctx.fillRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
+      this.ctx.strokeRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
+    });
+    this.ctx.restore();
   }
 
   // mouseDownHandler: User presses the mouse button; shapes begin to draw; Records where the user started to clicking
@@ -230,6 +344,25 @@ export class Game {
 
     this.startX = x;
     this.startY = y;
+
+    if (this.selectedTool === "select") {
+      // if a shape is already selected, check its resize handles before re-hit-testing
+      if (this.selectedShapeIndex !== null) {
+        const box = SelectionLogic.getBoundingBox(this.existingShapes[this.selectedShapeIndex]);
+        const handle = SelectionLogic.hitTestHandle(box, x, y, HANDLE_SCREEN_SIZE / this.scale);
+        if (handle) {
+          this.activeHandle = handle;
+          this.resizeAnchor = SelectionLogic.getResizeAnchor(box, handle);
+          return;
+        }
+      }
+
+      const hitIndex = SelectionLogic.hitTest(this.existingShapes, x, y, HIT_TEST_PADDING / this.scale);
+      this.selectedShapeIndex = hitIndex;
+      this.isDraggingShape = hitIndex !== null;
+      this.clearCanvas();
+      return;
+    }
 
     if(this.selectedTool === "grab") {
       // grab tool stores raw client coords, not world coords —
@@ -247,14 +380,38 @@ export class Game {
   // mouseUpHandler: When user release the mouse button, it finalizes the shape and saves it permanently
   mouseUpHandler = (e: MouseEvent) => {
     this.clicked = false;
+
+    if (this.selectedTool === "select") {
+      const wasEditing = this.activeHandle !== null || this.isDraggingShape;
+      const editedIndex = this.selectedShapeIndex;
+      this.activeHandle = null;
+      this.resizeAnchor = null;
+      this.isDraggingShape = false;
+
+      if (wasEditing && editedIndex !== null) {
+        const shape = this.existingShapes[editedIndex];
+        this.socket.send(
+          JSON.stringify({
+            type: "shape_update",
+            shapeId: shape.id,
+            message: JSON.stringify({ shape }),
+            roomId: this.roomId,
+          })
+        );
+      }
+      return; // select tool never creates a new shape
+    }
+
     const { x: endX, y: endY } = this.transformScreenToWorld(e.clientX, e.clientY);
     const width = endX - this.startX;
     const height = endY - this.startY;
 
     const selectedTool = this.selectedTool;
+    const newShapeId = crypto.randomUUID();
     let shape: Shape | null = null;
     if (selectedTool === "rect") {
       shape = {
+        id: newShapeId,
         type: "rect",
         x: this.startX,
         y: this.startY,
@@ -268,6 +425,7 @@ export class Game {
       const calradiusX = Math.abs(dx / 2); // cal. radius of x
       const calradiusY = Math.abs(dy / 2); // cal. radius of y
       shape = {
+        id: newShapeId,
         type: "circle",
         x: this.startX + dx / 2,
         y: this.startY + dy / 2,
@@ -276,6 +434,7 @@ export class Game {
       };
     } else if (selectedTool === "line") {
       shape = {
+        id: newShapeId,
         type: "line",
         startX: this.startX,
         startY: this.startY,
@@ -285,6 +444,7 @@ export class Game {
     } else if (selectedTool === "triangle") {
       const triSide = Math.max(width, height);
       shape = {
+        id: newShapeId,
         type: "triangle",
         x: this.startX,
         y: this.startY,
@@ -295,6 +455,7 @@ export class Game {
       this.currentPencilStroke.length > 1
     ) {
       shape = {
+        id: newShapeId,
         type: "pencil",
         points: this.currentPencilStroke,
       };
@@ -310,6 +471,7 @@ export class Game {
       const width = Math.abs(dx);
       const height = Math.abs(dy);
       shape = {
+        id: newShapeId,
         type: "diamond",
         x: cx,
         y: cy,
@@ -318,6 +480,7 @@ export class Game {
       }
     } else if (selectedTool === "arrow") {
       shape = {
+        id: newShapeId,
         type: "arrow",
         x: this.startX,
         y: this.startY,
@@ -335,6 +498,7 @@ export class Game {
     this.socket.send(
       JSON.stringify({
         type: "chat",
+        shapeId: shape.id,
         message: JSON.stringify({
           shape,
         }),
@@ -424,6 +588,31 @@ export class Game {
         this.DiamondShape(cx, cy, width, height);
       } else if (selectedTool === "arrow") {
         this.ArrowShape(this.startX, this.startY, curX, curY)
+      } else if (selectedTool === "select") {
+        if (this.activeHandle !== null && this.resizeAnchor !== null && this.selectedShapeIndex !== null) {
+          const anchor = this.resizeAnchor;
+          const box = {
+            x: Math.min(anchor.x, curX),
+            y: Math.min(anchor.y, curY),
+            width: Math.abs(curX - anchor.x),
+            height: Math.abs(curY - anchor.y),
+          };
+          this.existingShapes[this.selectedShapeIndex] = SelectionLogic.applyBoundingBox(
+            this.existingShapes[this.selectedShapeIndex],
+            box
+          );
+        } else if (this.isDraggingShape && this.selectedShapeIndex !== null) {
+          const dx = curX - this.startX;
+          const dy = curY - this.startY;
+          this.existingShapes[this.selectedShapeIndex] = SelectionLogic.translateShape(
+            this.existingShapes[this.selectedShapeIndex],
+            dx,
+            dy
+          );
+          this.startX = curX;
+          this.startY = curY;
+        }
+        this.clearCanvas()
       } else if (this.clicked && selectedTool === "grab") {
         
         const {x: trasformedX, y: transformedY} = this.transformScreenToWorld(e.clientX, e.clientY)
@@ -559,6 +748,10 @@ export class Game {
   }
   
   //----------------------------Bounding Box-----------------------------------------------
+
+  
+
+  //----------------------------Panning and Zooming-----------------------------------------
   
   // Builds a per-room storage key so switching rooms doesn't leak one room's saved camera position into another's
   private viewportStorageKey(): string {
