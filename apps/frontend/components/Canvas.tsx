@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
 import { Circle, Diamond, Hand, Minus, MousePointer2, MoveRight, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
 import { Game } from "@/app/draw/Game";
-import { useWindowSize } from "@/hooks/useWindowSize";
+// import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
 
@@ -12,8 +12,8 @@ export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [game, setGame] = useState<Game>();
-  const [selectedTool, setSelectedTool] = useState<Tool>("circle");
-  const { width, height } = useWindowSize();
+  const [selectedTool, setSelectedTool] = useState<Tool>("select");
+  // const { width, height } = useWindowSize();
   const [scale,  setScale] = useState(1);
 
 
@@ -30,7 +30,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
         g.destroy();
       };
     }
-  }, [canvasRef, roomId, socket, width, height]);
+  }, [canvasRef, roomId, socket]);
 
   // To update tool when changed
   useEffect(() => {
@@ -39,22 +39,31 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
 
 
   // update canvas and redraw on resize
-  useEffect(() => {
-    if (canvasRef.current && game) {
-      canvasRef.current.width = width;
-      canvasRef.current.height = height;
-      game.clearCanvas();
-    }
-  }, [width, height, game]);
+  // useEffect(() => {
+  //   if (canvasRef.current && game) {
+  //     canvasRef.current.width = width;
+  //     canvasRef.current.height = height;
+  //     game.clearCanvas();
+  //   }
+  // }, [width, height, game]);
+//   useEffect(() => {
+//     if (canvasRef.current) {
+//       const g = new Game(canvasRef.current, roomId, socket, setScale);
+//       setGame(g);
+//       return () => {
+//         g.destroy();
+//       }
+//     }
+// }, [canvasRef]);
   
   return (
     <div className="overflow-hidden h-[100vh]">
       <canvas
         ref={canvasRef}
-        // width={window.innerWidth}
-        width={width}
-        height={height}
-        // height={window.innerHeight}
+        width={window.innerWidth}
+        // width={width}
+        // height={height}
+        height={window.innerHeight}
         className={
           selectedTool === "grab"
             ? "cursor-grab"

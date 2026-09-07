@@ -1,16 +1,15 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { RectangleEllipsis } from "lucide-react";
-import { CANVAS_STORAGE_KEY, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, ROTATE_HANDLE_OFFSET, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 
-const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
-const HIT_TEST_PADDING = 6; // px, generous click target for thin shapes like line/arrow
+// const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
+// const HIT_TEST_PADDING = 6; // px, generous click target for thin shapes like line/arrow
 
 // `id` mirrors the owning Chat row's `shapeId` — how the backend finds this shape again to
 // persist a move/resize/delete. Every shape, old or new, is guaranteed to have one (see
 // getExistingShapes in http.ts and the backfill of legacy rows).
-export type Shape = { id: string } & (
+export type Shape = { id: string, rotation: number } & (
   | {
       type: "rect";
       x: number;
@@ -96,12 +95,21 @@ export class Game {
   // private outputScale: number = 1
   private saveViewportTimeout: ReturnType<typeof setTimeout> | null = null // // Holds the pending debounce timer's id, so a new pan/zoom event can cancel the previous scheduled save
   private isStandalone: boolean = false;
+  // set once destroy() runs — guards against a torn-down instance (e.g. React Strict Mode's
+  // dev-only double-mount) still painting the shared canvas after an in-flight fetch resolves
+  private destroyed: boolean = false;
   private selectedTool: Tool = "arrow";
   private selectedShapeIndex: number | null = null;
   private isDraggingShape: boolean = false;
   private activeHandle: HandleName | null = null;
   private resizeAnchor: { x: number; y: number } | null = null;
+  private resizeStartBox: { x: number; y: number; width: number; height: number } | null = null;
+  private resizeRotation: number = 0;
   private currentPencilStroke: { x: number; y: number }[] = [];
+  private isRotating: boolean = false;
+  private rotationPivot: { x: number; y: number } | null = null;
+  private rotationStartAngle: number = 0;
+  private shapeRotationAtStart: number = 0;
   socket: WebSocket;
 
   constructor(canvas: HTMLCanvasElement, roomId: string, socket: WebSocket, onScaleChangeCallback: (scale: number) => void) {
@@ -119,6 +127,8 @@ export class Game {
   }
 
   destroy() {
+    this.destroyed = true;
+
     this.canvas.removeEventListener("mousedown", this.mouseDownHandler);
 
     this.canvas.removeEventListener("mouseup", this.mouseUpHandler);
@@ -234,6 +244,8 @@ export class Game {
 
   // ClearCanvas(){} -> Clears everything; Redraws the permanent shapes; Draw the current preview shape
   clearCanvas() {
+    if (this.destroyed) return;
+
     // Clears the entire canvas:
     // this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
@@ -256,8 +268,39 @@ export class Game {
       this.canvas.height/this.scale
     );
 
+    // Every shape stroke defaults to white — set explicitly here rather than relying on
+    // whatever strokeStyle a previous draw call happened to leave on the context (only "rect"
+    // ever set it itself, so on a fresh canvas every other shape type drew invisibly in the
+    // default black, matching the background, until *something* else set it to white first).
+    this.ctx.strokeStyle = "rgba(255, 255, 255)";
+
     // Redraws Existing Shapes
-    this.existingShapes.map((shape) => {
+    this.existingShapes.forEach((shape) => {
+      // A single malformed/legacy shape (mismatched fields for its type, producing NaN
+      // geometry) must not be able to abort this loop and hide every shape after it —
+      // e.g. ctx.ellipse() throws synchronously on non-finite radii.
+      try {
+        this.drawShape(shape);
+      } catch (e) {
+        console.error("Skipping shape that failed to render:", shape, e);
+      }
+    });
+
+    if (this.selectedShapeIndex !== null && this.existingShapes[this.selectedShapeIndex]) {
+      this.drawSelectionOutline(this.existingShapes[this.selectedShapeIndex]);
+    }
+  }
+
+  private drawShape(shape: Shape) {
+      const box = SelectionLogic.getBoundingBox(shape)
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+
+      this.ctx.save();
+      try {
+      this.ctx.translate(cx, cy);
+      this.ctx.rotate(shape.rotation);
+      this.ctx.translate(-cx, -cy);
       // Drawing logic of each shape type
       if (shape.type === "rect") {
         this.ctx.strokeStyle = "rgba(255, 255, 255)";
@@ -305,33 +348,9 @@ export class Game {
       } else if (shape.type === "arrow") {
         this.ArrowShape(shape.x, shape.y, shape.toX, shape.toY);
       }
-    });
-
-    if (this.selectedShapeIndex !== null && this.existingShapes[this.selectedShapeIndex]) {
-      this.drawSelectionOutline(this.existingShapes[this.selectedShapeIndex]);
-    }
-  }
-
-  private drawSelectionOutline(shape: Shape) {
-    const box = SelectionLogic.getBoundingBox(shape);
-
-    this.ctx.save();
-    this.ctx.setLineDash([4 / this.scale, 4 / this.scale]);
-    this.ctx.lineWidth = 1 / this.scale;
-    this.ctx.strokeStyle = "rgba(56, 161, 255, 0.9)";
-    this.ctx.strokeRect(box.x, box.y, box.width, box.height);
-    this.ctx.restore();
-
-    const handleSize = HANDLE_SCREEN_SIZE / this.scale;
-    this.ctx.save();
-    this.ctx.fillStyle = "rgba(56, 161, 255, 1)";
-    this.ctx.strokeStyle = "white";
-    this.ctx.lineWidth = 1 / this.scale;
-    Object.values(SelectionLogic.getHandlePositions(box)).forEach((h) => {
-      this.ctx.fillRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
-      this.ctx.strokeRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
-    });
-    this.ctx.restore();
+      } finally {
+        this.ctx.restore()
+      }
   }
 
   // mouseDownHandler: User presses the mouse button; shapes begin to draw; Records where the user started to clicking
@@ -348,11 +367,26 @@ export class Game {
     if (this.selectedTool === "select") {
       // if a shape is already selected, check its resize handles before re-hit-testing
       if (this.selectedShapeIndex !== null) {
-        const box = SelectionLogic.getBoundingBox(this.existingShapes[this.selectedShapeIndex]);
-        const handle = SelectionLogic.hitTestHandle(box, x, y, HANDLE_SCREEN_SIZE / this.scale);
+        const selected = this.existingShapes[this.selectedShapeIndex];
+        const box = SelectionLogic.getBoundingBox(selected);
+        const local = SelectionLogic.toLocalPoint(x, y, box, selected.rotation);
+        const rotateHandlePos = SelectionLogic.getRotateHandlePosition(box, ROTATE_HANDLE_OFFSET / this.scale);
+        const distToRotateHandle = Math.hypot(local.x - rotateHandlePos.x, local.y - rotateHandlePos.y);
+        if (distToRotateHandle <= HANDLE_SCREEN_SIZE / this.scale) {
+          const cx = box.x + box.width / 2;
+          const cy = box.y + box.height / 2;
+          this.isRotating = true;
+          this.rotationPivot = { x: cx, y: cy };
+          this.rotationStartAngle = Math.atan2(y - cy, x - cx);
+          this.shapeRotationAtStart = selected.rotation;
+          return;
+        }
+        const handle = SelectionLogic.hitTestHandle(box, local.x, local.y, HANDLE_SCREEN_SIZE / this.scale);
         if (handle) {
           this.activeHandle = handle;
           this.resizeAnchor = SelectionLogic.getResizeAnchor(box, handle);
+          this.resizeStartBox = box;
+          this.resizeRotation = selected.rotation;
           return;
         }
       }
@@ -382,11 +416,14 @@ export class Game {
     this.clicked = false;
 
     if (this.selectedTool === "select") {
-      const wasEditing = this.activeHandle !== null || this.isDraggingShape;
+      const wasEditing = this.activeHandle !== null || this.isDraggingShape || this.isRotating;
       const editedIndex = this.selectedShapeIndex;
       this.activeHandle = null;
       this.resizeAnchor = null;
+      this.resizeStartBox = null;
       this.isDraggingShape = false;
+      this.isRotating = false;
+      this.rotationPivot = null;
 
       if (wasEditing && editedIndex !== null) {
         const shape = this.existingShapes[editedIndex];
@@ -412,6 +449,7 @@ export class Game {
     if (selectedTool === "rect") {
       shape = {
         id: newShapeId,
+        rotation: 0,
         type: "rect",
         x: this.startX,
         y: this.startY,
@@ -426,6 +464,7 @@ export class Game {
       const calradiusY = Math.abs(dy / 2); // cal. radius of y
       shape = {
         id: newShapeId,
+        rotation: 0,
         type: "circle",
         x: this.startX + dx / 2,
         y: this.startY + dy / 2,
@@ -435,6 +474,7 @@ export class Game {
     } else if (selectedTool === "line") {
       shape = {
         id: newShapeId,
+        rotation: 0,
         type: "line",
         startX: this.startX,
         startY: this.startY,
@@ -445,6 +485,7 @@ export class Game {
       const triSide = Math.max(width, height);
       shape = {
         id: newShapeId,
+        rotation: 0,
         type: "triangle",
         x: this.startX,
         y: this.startY,
@@ -456,6 +497,7 @@ export class Game {
     ) {
       shape = {
         id: newShapeId,
+        rotation: 0,
         type: "pencil",
         points: this.currentPencilStroke,
       };
@@ -472,6 +514,7 @@ export class Game {
       const height = Math.abs(dy);
       shape = {
         id: newShapeId,
+        rotation: 0,
         type: "diamond",
         x: cx,
         y: cy,
@@ -481,6 +524,7 @@ export class Game {
     } else if (selectedTool === "arrow") {
       shape = {
         id: newShapeId,
+        rotation: 0,
         type: "arrow",
         x: this.startX,
         y: this.startY,
@@ -589,13 +633,22 @@ export class Game {
       } else if (selectedTool === "arrow") {
         this.ArrowShape(this.startX, this.startY, curX, curY)
       } else if (selectedTool === "select") {
-        if (this.activeHandle !== null && this.resizeAnchor !== null && this.selectedShapeIndex !== null) {
+        if (this.isRotating && this.rotationPivot !== null && this.selectedShapeIndex !== null) {
+          const pivot = this.rotationPivot;
+          const currentAngle = Math.atan2(curY - pivot.y, curX - pivot.x);
+          const delta = currentAngle - this.rotationStartAngle;
+          this.existingShapes[this.selectedShapeIndex] = {
+            ...this.existingShapes[this.selectedShapeIndex],
+            rotation: this.shapeRotationAtStart + delta,
+          };
+        } else if (this.activeHandle !== null && this.resizeAnchor !== null && this.selectedShapeIndex !== null && this.resizeStartBox) {
           const anchor = this.resizeAnchor;
+          const localPoint = SelectionLogic.toLocalPoint(curX, curY, this.resizeStartBox, this.resizeRotation);
           const box = {
-            x: Math.min(anchor.x, curX),
-            y: Math.min(anchor.y, curY),
-            width: Math.abs(curX - anchor.x),
-            height: Math.abs(curY - anchor.y),
+            x: Math.min(anchor.x, localPoint.x),
+            y: Math.min(anchor.y, localPoint.y),
+            width: Math.abs(localPoint.x - anchor.x),
+            height: Math.abs(localPoint.y - anchor.y),
           };
           this.existingShapes[this.selectedShapeIndex] = SelectionLogic.applyBoundingBox(
             this.existingShapes[this.selectedShapeIndex],
@@ -746,10 +799,6 @@ export class Game {
     // }
     this.onScaleChangeCallback?.(scale);
   }
-  
-  //----------------------------Bounding Box-----------------------------------------------
-
-  
 
   //----------------------------Panning and Zooming-----------------------------------------
   
@@ -771,5 +820,53 @@ export class Game {
         console.error("Error saving viewport to localStorage:", e)
       }
     }, 150)
+  }
+
+  // -------------------------- For selection logic--------------------------------------------
+
+  private drawSelectionOutline(shape: Shape) {
+    const box = SelectionLogic.getBoundingBox(shape);
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    this.ctx.save();
+    this.ctx.translate(cx, cy);
+    this.ctx.rotate(shape.rotation);
+    this.ctx.translate(-cx, -cy);
+    
+    this.ctx.setLineDash([4 / this.scale, 4 / this.scale]);
+    this.ctx.lineWidth = 1 / this.scale;
+    this.ctx.strokeStyle = "rgba(56, 161, 255, 0.9)";
+    this.ctx.strokeRect(box.x, box.y, box.width, box.height);
+    // this.ctx.restore();
+
+    const rotateHandle = SelectionLogic.getRotateHandlePosition(box, ROTATE_HANDLE_OFFSET / this.scale);
+
+    const handleSize = HANDLE_SCREEN_SIZE / this.scale;
+    // this.ctx.save();
+    this.ctx.fillStyle = "rgba(56, 161, 255, 1)";
+    this.ctx.strokeStyle = "white";
+    // this.ctx.lineWidth = 1 / this.scale;
+    Object.values(SelectionLogic.getHandlePositions(box)).forEach((h) => {
+      this.ctx.fillRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
+      this.ctx.strokeRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
+    });
+
+    // for rotating shape a small circle at top edge
+    this.ctx.beginPath();
+    this.ctx.moveTo(box.x + box.width / 2, box.y);
+    this.ctx.lineTo(rotateHandle.x, rotateHandle.y);
+    this.ctx.strokeStyle = "rgba(56, 161, 255, 0.9)";
+    this.ctx.lineWidth = 1 / this.scale;
+    this.ctx.stroke();
+
+    this.ctx.beginPath();
+    this.ctx.arc(rotateHandle.x, rotateHandle.y, handleSize / 2, 0, Math.PI * 2);
+    this.ctx.fillStyle = "rgba(56, 161, 255, 1)";
+    this.ctx.fill();
+    this.ctx.strokeStyle = "white";
+    this.ctx.stroke();
+
+    this.ctx.restore();
   }
 }

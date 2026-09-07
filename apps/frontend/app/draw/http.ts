@@ -9,7 +9,7 @@ export async function getExistingShapes(roomId: string) {
         const messageData = JSON.parse(x.message)
         // shapeId is how the backend identifies this shape for later updates/deletes —
         // attach it as the shape's own `id` so the frontend has one consistent field to use
-        return { ...messageData.shape, id: x.shapeId };
+        return { ...messageData.shape, id: x.shapeId, rotation: messageData.shape.rotation ?? 0 };
     })
 
     return shapes;

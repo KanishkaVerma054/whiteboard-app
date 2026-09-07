@@ -99,11 +99,21 @@ export class SelectionLogic {
   // padding lets thin shapes (a zero-height line, say) still be clickable.
   static hitTest(shapes: Shape[], x: number, y: number, padding = 0): number | null {
     for (let i = shapes.length - 1; i >= 0; i--) {
-      if (this.isPointInBox(x, y, this.getBoundingBox(shapes[i]), padding)) {
+      const box = this.getBoundingBox(shapes[i]);
+      const local = this.toLocalPoint(x, y, box, shapes[i].rotation);
+      // if (this.isPointInBox(x, y, this.getBoundingBox(shapes[i]), padding)) {
+      if (this.isPointInBox(local.x, local.y, box, padding)) {
         return i;
       }
     }
     return null;
+  }
+
+  static getRotateHandlePosition(box: BoundingBox, offset: number): {x: number; y: number} {
+    return {
+      x : box.x + box.width / 2,
+      y: box.y - offset
+    };
   }
 
   static getHandlePositions(box: BoundingBox): Record<HandleName, { x: number; y: number }> {
@@ -207,5 +217,23 @@ export class SelectionLogic {
       default:
         return shape;
     }
+  }
+
+  // Converts a world-space point into the shape's local (unrotated) frame, by rotating it
+  // backwards around the box's center — the inverse of the rotation applied at render time.
+  static toLocalPoint(x: number, y: number, box: BoundingBox, rotation: number) {
+    if (rotation === 0) {
+      return {x, y}
+    }
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const cos = Math.cos(-rotation);
+    const sin = Math.sin(-rotation);
+    const dx = x - cx;
+    const dy = y - cy;
+    return {
+      x: cx + dx * cos - dy * sin,
+      y: cy + dx * sin + dy * cos,
+    };
   }
 }
