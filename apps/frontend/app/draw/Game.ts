@@ -1,6 +1,6 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, ROTATE_HANDLE_OFFSET, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
@@ -368,7 +368,12 @@ export class Game {
       // if a shape is already selected, check its resize handles before re-hit-testing
       if (this.selectedShapeIndex !== null) {
         const selected = this.existingShapes[this.selectedShapeIndex];
-        const box = SelectionLogic.getBoundingBox(selected);
+        // padded to match the visual selection outline/handles drawn in drawSelectionOutline —
+        // padding is symmetric so this doesn't move the rotation pivot (box center) at all
+        const box = SelectionLogic.getPaddedBox(
+          SelectionLogic.getBoundingBox(selected),
+          SELECTION_PADDING / this.scale
+        );
         const local = SelectionLogic.toLocalPoint(x, y, box, selected.rotation);
         const rotateHandlePos = SelectionLogic.getRotateHandlePosition(box, ROTATE_HANDLE_OFFSET / this.scale);
         const distToRotateHandle = Math.hypot(local.x - rotateHandlePos.x, local.y - rotateHandlePos.y);
@@ -644,12 +649,16 @@ export class Game {
         } else if (this.activeHandle !== null && this.resizeAnchor !== null && this.selectedShapeIndex !== null && this.resizeStartBox) {
           const anchor = this.resizeAnchor;
           const localPoint = SelectionLogic.toLocalPoint(curX, curY, this.resizeStartBox, this.resizeRotation);
-          const box = {
+          // anchor/localPoint are both padded-outline corners (resizeAnchor/resizeStartBox were
+          // captured from the padded box) — shrink back by the same padding to get the shape's
+          // real, unpadded geometry before writing it
+          const paddedBox = {
             x: Math.min(anchor.x, localPoint.x),
             y: Math.min(anchor.y, localPoint.y),
             width: Math.abs(localPoint.x - anchor.x),
             height: Math.abs(localPoint.y - anchor.y),
           };
+          const box = SelectionLogic.getPaddedBox(paddedBox, -(SELECTION_PADDING / this.scale));
           this.existingShapes[this.selectedShapeIndex] = SelectionLogic.applyBoundingBox(
             this.existingShapes[this.selectedShapeIndex],
             box
@@ -824,8 +833,14 @@ export class Game {
 
   // -------------------------- For selection logic--------------------------------------------
 
+  // Styled after Excalidraw's selection UI: a solid indigo outline sitting a small gap
+  // outside the shape (not flush against it), white-filled handles with a rounded square
+  // for resize corners and a plain circle for rotate, both stroked in the same indigo.
   private drawSelectionOutline(shape: Shape) {
-    const box = SelectionLogic.getBoundingBox(shape);
+    const box = SelectionLogic.getPaddedBox(
+      SelectionLogic.getBoundingBox(shape),
+      SELECTION_PADDING / this.scale
+    );
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
@@ -833,38 +848,35 @@ export class Game {
     this.ctx.translate(cx, cy);
     this.ctx.rotate(shape.rotation);
     this.ctx.translate(-cx, -cy);
-    
-    this.ctx.setLineDash([4 / this.scale, 4 / this.scale]);
-    this.ctx.lineWidth = 1 / this.scale;
-    this.ctx.strokeStyle = "rgba(56, 161, 255, 0.9)";
-    this.ctx.strokeRect(box.x, box.y, box.width, box.height);
-    // this.ctx.restore();
 
-    const rotateHandle = SelectionLogic.getRotateHandlePosition(box, ROTATE_HANDLE_OFFSET / this.scale);
+    this.ctx.lineWidth = 1 / this.scale;
+    this.ctx.strokeStyle = SELECTION_COLOR;
+    this.ctx.strokeRect(box.x, box.y, box.width, box.height);
 
     const handleSize = HANDLE_SCREEN_SIZE / this.scale;
-    // this.ctx.save();
-    this.ctx.fillStyle = "rgba(56, 161, 255, 1)";
-    this.ctx.strokeStyle = "white";
-    // this.ctx.lineWidth = 1 / this.scale;
+    const handleRadius = 2 / this.scale;
+    this.ctx.fillStyle = "white";
+    this.ctx.strokeStyle = SELECTION_COLOR;
     Object.values(SelectionLogic.getHandlePositions(box)).forEach((h) => {
-      this.ctx.fillRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
-      this.ctx.strokeRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
+      const hx = h.x - handleSize / 2;
+      const hy = h.y - handleSize / 2;
+      if (this.ctx.roundRect) {
+        this.ctx.beginPath();
+        this.ctx.roundRect(hx, hy, handleSize, handleSize, handleRadius);
+        this.ctx.fill();
+        this.ctx.stroke();
+      } else {
+        this.ctx.fillRect(hx, hy, handleSize, handleSize);
+        this.ctx.strokeRect(hx, hy, handleSize, handleSize);
+      }
     });
 
-    // for rotating shape a small circle at top edge
-    this.ctx.beginPath();
-    this.ctx.moveTo(box.x + box.width / 2, box.y);
-    this.ctx.lineTo(rotateHandle.x, rotateHandle.y);
-    this.ctx.strokeStyle = "rgba(56, 161, 255, 0.9)";
-    this.ctx.lineWidth = 1 / this.scale;
-    this.ctx.stroke();
-
+    const rotateHandle = SelectionLogic.getRotateHandlePosition(box, ROTATE_HANDLE_OFFSET / this.scale);
     this.ctx.beginPath();
     this.ctx.arc(rotateHandle.x, rotateHandle.y, handleSize / 2, 0, Math.PI * 2);
-    this.ctx.fillStyle = "rgba(56, 161, 255, 1)";
+    this.ctx.fillStyle = "white";
     this.ctx.fill();
-    this.ctx.strokeStyle = "white";
+    this.ctx.strokeStyle = SELECTION_COLOR;
     this.ctx.stroke();
 
     this.ctx.restore();

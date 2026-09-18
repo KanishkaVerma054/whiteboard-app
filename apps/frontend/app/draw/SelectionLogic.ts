@@ -109,6 +109,18 @@ export class SelectionLogic {
     return null;
   }
 
+  // Expands (or, with a negative padding, shrinks back) a box outward on every side —
+  // used so the selection UI can sit a small gap outside the shape's real geometry
+  // instead of hugging it exactly, then convert back before writing a resize.
+  static getPaddedBox(box: BoundingBox, padding: number): BoundingBox {
+    return {
+      x: box.x - padding,
+      y: box.y - padding,
+      width: box.width + padding * 2,
+      height: box.height + padding * 2,
+    };
+  }
+
   static getRotateHandlePosition(box: BoundingBox, offset: number): {x: number; y: number} {
     return {
       x : box.x + box.width / 2,
