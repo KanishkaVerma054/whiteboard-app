@@ -1,13 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { Circle, Diamond, Hand, Minus, MousePointer2, MoveRight, Pencil, RectangleHorizontalIcon, Triangle } from "lucide-react";
+import { CaseSensitive, Circle, CodeXml, Diamond, Hand, Minus, MousePointer2, MoveRight, PanelBottom, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
 import { Game } from "@/app/draw/Game";
+import { FONT_FAMILIES, FontFamily, PanelState } from "@/types/types";
 // import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
 
 
-export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select";
+export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text";
+
+// icon per font family, shown instead of the text label in the font-family row —
+// Pencil doubles as both the pencil *tool* icon and the "hand-drawn" *font* icon
+// (the same reuse CollabyDraw's own icon map makes), disambiguated by context
+const FONT_FAMILY_ICONS: Record<FontFamily, ReactNode> = {
+  "hand-drawn": <Pencil className="w-4 h-4" />,
+  sans: <CaseSensitive className="w-4 h-4" />,
+  code: <CodeXml className="w-4 h-4" />,
+};
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -15,6 +25,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
   const [selectedTool, setSelectedTool] = useState<Tool>("select");
   // const { width, height } = useWindowSize();
   const [scale,  setScale] = useState(1);
+  const[panel, setPanel] = useState<PanelState | null>(null);
 
 
   useEffect(() => {
@@ -23,7 +34,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
 
   useEffect(() => {
     if (canvasRef.current) {
-      const g = new Game(canvasRef.current, roomId, socket, setScale );
+      const g = new Game(canvasRef.current, roomId, socket, setScale,  setPanel );
       setGame(g);
 
       return () => {
@@ -57,7 +68,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
 // }, [canvasRef]);
   
   return (
-    <div className="overflow-hidden h-[100vh]">
+    <div className="overflow-hidden h-[100vh] relative">
       <canvas
         ref={canvasRef}
         width={window.innerWidth}
@@ -72,7 +83,7 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
             : "cursor-crosshair"
         }
       ></canvas>
-      <Topbar setSelectedTool={setSelectedTool} selectedTool={selectedTool} />
+      <Topbar setSelectedTool={setSelectedTool} selectedTool={selectedTool} panel={panel} onFontFamilyChange={(f) => game?.setFontFamily(f)}/>
     </div>
   );
 };
@@ -80,9 +91,13 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
 function Topbar({
   selectedTool,
   setSelectedTool,
+  panel,
+  onFontFamilyChange
 }: {
   selectedTool: Tool;
   setSelectedTool: (s: Tool) => void;
+  panel:PanelState | null;
+  onFontFamilyChange: (f: FontFamily) => void;
 }) {
   return (
     <div className="fixed top-[10px] left-[10px]">
@@ -151,7 +166,39 @@ function Topbar({
             setSelectedTool("grab");
           }}
         ></IconButton>
+        <IconButton
+          
+          activated={selectedTool === "text"}
+          icon={<Type />}
+          onClick={() => {
+            setSelectedTool("text");
+          }}
+        ></IconButton>
       </div>
+      {panel?.kind === "text" && (
+        <div
+          className="flex flex-col gap-1.5 mt-2 w-fit rounded-lg border border-neutral-700 bg-neutral-900 p-3 text-white"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <span className="text-xs text-gray-400">Font family</span>
+          <div className="flex gap-1.5">
+            {(Object.keys(FONT_FAMILIES) as FontFamily[]).map((f) => (
+              <button
+                key={f}
+                title={FONT_FAMILIES[f].label}
+                onClick={() => onFontFamilyChange(f)}
+                className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                  panel.fontFamily === f
+                    ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                    : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                }`}
+              >
+                {FONT_FAMILY_ICONS[f]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, DEFAULT_FONT_FAMILY, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
@@ -58,6 +58,16 @@ export type Shape = { id: string, rotation: number } & (
       toX: number;
       toY: number;
     }
+  | {
+      type: "text";
+      x: number;
+      y: number;
+      text: string;
+      fontSize: number;
+      fontFamily: FontFamily
+      width: number;
+      height: number;
+    }
 );
 
 const KNOWN_SHAPE_TYPES = new Set<Shape["type"]>([
@@ -68,7 +78,10 @@ const KNOWN_SHAPE_TYPES = new Set<Shape["type"]>([
   "triangle",
   "diamond",
   "arrow",
+  "text"
 ]);
+
+export type TextShape = Extract<Shape, {type: "text"}>
 
 // Guards against legacy/malformed rows from the backend (e.g. an old, since-removed tool's
 // leftover data) or a garbage message from another client — anything not a currently-known shape.
@@ -110,9 +123,17 @@ export class Game {
   private rotationPivot: { x: number; y: number } | null = null;
   private rotationStartAngle: number = 0;
   private shapeRotationAtStart: number = 0;
+  private enableTextArea: HTMLTextAreaElement | null = null;
+  private currentFontFamily: FontFamily = DEFAULT_FONT_FAMILY;
+  private editingShapeId: string | null = null;
+  private onPanelChange?: (state: PanelState | null) => void;
+  private lastPanelKey: string = "";
+  private editingFontFamily: FontFamily = DEFAULT_FONT_FAMILY;
+  private updateEditorFont: (() => void) | null = null
+
   socket: WebSocket;
 
-  constructor(canvas: HTMLCanvasElement, roomId: string, socket: WebSocket, onScaleChangeCallback: (scale: number) => void) {
+  constructor(canvas: HTMLCanvasElement, roomId: string, socket: WebSocket, onScaleChangeCallback: (scale: number) => void, onPanelChange?: (state: PanelState | null) => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.existingShapes = [];
@@ -120,6 +141,7 @@ export class Game {
     this.socket = socket;
     this.clicked = false;
     this.onScaleChangeCallback = onScaleChangeCallback;
+    this.onPanelChange = onPanelChange;
     this.init();
     this.initHandlers();
     this.initMouseHandlers();
@@ -130,16 +152,17 @@ export class Game {
     this.destroyed = true;
 
     this.canvas.removeEventListener("mousedown", this.mouseDownHandler);
-
     this.canvas.removeEventListener("mouseup", this.mouseUpHandler);
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
-
-    this.canvas.removeEventListener("wheel", this.mouseWheelHandler)
+    this.canvas.removeEventListener("wheel", this.mouseWheelHandler);
+    this.canvas.removeEventListener("dblclick", this.dblClickHandler);
+    
     window.removeEventListener("keydown", this.keyDownHandler);
   }
 
   // Delete/Backspace removes the selected shape (and broadcasts the delete); Escape clears the selection.
   keyDownHandler = (e: KeyboardEvent) => {
+    if(this.enableTextArea) return;
     if (this.selectedTool !== "select" || this.selectedShapeIndex === null) return;
 
     if (e.key === "Delete" || e.key === "Backspace") {
@@ -162,7 +185,7 @@ export class Game {
   };
 
   setTool(
-    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select"
+    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text"
   ) {
     if (tool !== "select") {
       this.selectedShapeIndex = null;
@@ -204,6 +227,10 @@ export class Game {
       console.error("Error loading viewport from localStorage:", e);
     }
 
+    Object.values(FONT_FAMILIES).forEach((f) => {
+      document.fonts.load(`20px ${f.css}`).then(() => this.clearCanvas())
+    })
+
     this.clearCanvas();
   }
 
@@ -213,7 +240,12 @@ export class Game {
 
       if (message.type == "chat") {
         const parsedShape = JSON.parse(message.message);
-        if (isKnownShape(parsedShape.shape)) {
+        // the server echoes our own new shapes back to us too, and we already pushed
+        // them locally when creating — skip anything we already have by id
+        if (
+          isKnownShape(parsedShape.shape) &&
+          !this.existingShapes.some((s) => s.id === parsedShape.shape.id)
+        ) {
           this.existingShapes.push(parsedShape.shape);
           this.clearCanvas();
         }
@@ -276,6 +308,8 @@ export class Game {
 
     // Redraws Existing Shapes
     this.existingShapes.forEach((shape) => {
+      if(shape.id === this.editingShapeId) return; // being edited live in the textarea overlay
+      
       // A single malformed/legacy shape (mismatched fields for its type, producing NaN
       // geometry) must not be able to abort this loop and hide every shape after it —
       // e.g. ctx.ellipse() throws synchronously on non-finite radii.
@@ -289,6 +323,7 @@ export class Game {
     if (this.selectedShapeIndex !== null && this.existingShapes[this.selectedShapeIndex]) {
       this.drawSelectionOutline(this.existingShapes[this.selectedShapeIndex]);
     }
+    this.syncPanel();
   }
 
   private drawShape(shape: Shape) {
@@ -347,6 +382,14 @@ export class Game {
         this.DiamondShape(shape.x, shape.y, shape.width, shape.height);
       } else if (shape.type === "arrow") {
         this.ArrowShape(shape.x, shape.y, shape.toX, shape.toY);
+      } else if (shape.type === "text") {
+        const family = shape.fontFamily ?? DEFAULT_FONT_FAMILY;
+        this.ctx.fillStyle = "white";
+        this.ctx.font = `${shape.fontSize}px ${FONT_FAMILIES[family].css}`;
+        this.ctx.textBaseline = "top";
+        shape.text.split("\n").forEach((line, i) => {
+          this.ctx.fillText(line, shape.x, shape.y + i * shape.fontSize * LINE_HEIGHT)
+        });
       }
       } finally {
         this.ctx.restore()
@@ -413,6 +456,11 @@ export class Game {
 
     if (this.selectedTool === "pencil") {
       this.currentPencilStroke = [{ x: this.startX, y: this.startY }];
+    }
+
+    if (this.selectedTool === "text" && !this.enableTextArea) {
+      this.textEditing(x, y);
+      return;
     }
   };
 
@@ -723,11 +771,22 @@ export class Game {
     this.clearCanvas()
   }
 
+  dblClickHandler = (e: MouseEvent) => {
+    if (this.selectedTool !== "select" || this.enableTextArea) return;
+    const {x, y} = this.transformScreenToWorld(e.clientX, e.clientY);
+    const i = SelectionLogic.hitTest(this.existingShapes, x, y, HIT_TEST_PADDING/this.scale);
+    if(i===null) return;
+    const shape = this.existingShapes[i];
+    if(shape.type !== "text") return;
+    this.textEditing(shape.x, shape.y, shape);
+  }
+
   initMouseHandlers() {
     this.canvas.addEventListener("mouseup", this.mouseUpHandler);
     this.canvas.addEventListener("mousedown", this.mouseDownHandler);
     this.canvas.addEventListener("mousemove", this.mouseMoveHandler);
     this.canvas.addEventListener("wheel", this.mouseWheelHandler, {passive: false});
+    this.canvas.addEventListener("dblclick", this.dblClickHandler)
   }
 
   // TODO:-----------Shape Logic...will be moved to saperate file later on----------------
@@ -880,5 +939,216 @@ export class Game {
     this.ctx.stroke();
 
     this.ctx.restore();
+  }
+
+  //-------------------------------TextBox------------------------------
+
+  // The authoritative size for a text shape — computed from the same canvas context/font
+  // that will actually draw it, so it can never depend on DOM layout timing the way reading
+  // a live <textarea>'s offsetWidth/offsetHeight can (that can read back 0 in edge cases,
+  // e.g. a backgrounded tab, producing an unselectable zero-area shape).
+  private measureText(text: string, fontSize: number, family: FontFamily) {
+    this.ctx.save();
+    this.ctx.font = `${fontSize}px ${FONT_FAMILIES[family].css}`;
+    const lines = text.split("\n");
+    const width = Math.max(...lines.map((l) => this.ctx.measureText(l).width));
+    this.ctx.restore();
+    return { width, height: lines.length * fontSize * LINE_HEIGHT };
+  }
+
+  private textEditing(worldX: number, worldY: number, existing?: TextShape) {
+    const textArea = document.createElement("textarea")
+    this.enableTextArea = textArea;
+
+    this.editingShapeId = existing?.id ?? null;
+
+
+    Object.assign(textArea.style, {
+      position: "absolute",
+      // the transform below is relative to the element's *static* position, which (being
+      // appended after the full-height canvas) is the bottom-left of the container —
+      // anchor to the container's top-left instead so the transform lands where you clicked
+      top: "0",
+      left: "0",
+      margin: "0",
+      padding: "0",
+      border: "1px dotted white",
+      outline: "0",
+      resize: "none",
+      background: "transparent",
+      overflow: "hidden",
+      whiteSpace: "pre",
+      color: "white",
+      zIndex: "100"
+    })
+    const fontSize = existing?.fontSize ?? 20; //TODO: we should add diffrent fint sizes but for now we should fix it to one
+    const fontFamily = existing?.fontFamily ?? this.currentFontFamily;
+    this.editingFontFamily = fontFamily;
+    this.syncPanel();
+    textArea.style.font = `${fontSize*this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[fontFamily].css}`;
+    textArea.style.transform = `translate(${worldX * this.scale + this.panX}px, ${worldY * this.scale + this.panY}px)`
+
+    this.canvas.parentElement?.appendChild(textArea);
+    if(existing) {
+      textArea.value = existing.text;
+      this.clearCanvas();
+    }
+    setTimeout(() => {
+      textArea.focus();
+      if(existing) textArea.select();
+    }, 0);
+
+     // hidden span measures the current text so the textarea can grow to fit it live
+     const span = document.createElement("span")
+     Object.assign(span.style, {
+      visibility: "hidden",
+      position: "absolute",
+      top: "0",
+      left: "0",
+      pointerEvents: "none",
+      whiteSpace: "pre",
+      font: textArea.style.font, 
+     })
+     document.body.appendChild(span);
+
+     const resize = () => {
+      span.textContent = textArea.value || " ";
+      textArea.style.width = `${span.offsetWidth + 4}px`;
+      textArea.style.height = `${span.offsetHeight + 4}px`;
+     };
+     resize();
+     textArea.addEventListener("input", resize)
+
+     this.updateEditorFont = () => {
+      const font = `${fontSize * this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[this.editingFontFamily].css}`;
+      textArea.style.font = font;
+      span.style.font = font;
+      resize();
+     };
+
+     let saved = false;
+     const save = () => {
+      if (saved) return;
+      saved = true;
+      const text = textArea.value.trim();
+      // canvas-measured, not DOM-measured — offsetWidth/offsetHeight can read back 0 in edge
+      // cases (e.g. a backgrounded tab), which produced a real, zero-area, unselectable shape
+      const { width, height } = this.measureText(text || " ", fontSize, fontFamily);
+      this.enableTextArea = null;
+      this.updateEditorFont = null;
+      this.editingShapeId = null;
+      textArea.remove();
+      span.remove();
+
+      if (existing) {
+        const i = this.existingShapes.findIndex((s) => s.id === existing.id);
+        if (i === -1) {
+          // shape vanished mid-edit (e.g. deleted by another client) — nothing to update
+          this.clearCanvas();
+          return;
+        }
+        if (!text) {
+          this.existingShapes.splice(i, 1);
+          this.socket.send(JSON.stringify({ type: "shape_delete", shapeId: existing.id, roomId: this.roomId }));
+        } else {
+          const updated: Shape = { ...existing, text, fontFamily, width, height };
+          this.existingShapes[i] = updated;
+          this.socket.send(JSON.stringify({
+            type: "shape_update",
+            shapeId: updated.id,
+            message: JSON.stringify({ shape: updated }),
+            roomId: this.roomId,
+          }));
+        }
+        this.clearCanvas();
+        return;
+      }
+
+      if(!text){
+        this.clearCanvas();
+        return;
+      }
+
+      const shape: Shape = {
+        id: crypto.randomUUID(),
+        rotation: 0,
+        type: "text",
+        x: worldX,
+        y: worldY,
+        text,
+        fontSize,
+        fontFamily: this.currentFontFamily,
+        width,
+        height,
+      };
+      this.existingShapes.push(shape);
+      this.socket.send(
+        JSON.stringify({
+          type: "chat",
+          shapeId: shape.id,
+          message: JSON.stringify({ shape }),
+          roomId: this.roomId,
+        })
+      );
+      this.clearCanvas();
+     }
+     textArea.addEventListener("blur", save);
+     textArea.addEventListener("keydown", (e) => {
+      if(e.key === "Enter" && (e.ctrlKey || e.metaKey)){
+        e.preventDefault();
+        save();
+      } else if(e.key === "Escape") {
+        saved = true;
+        textArea.remove();
+        span.remove();
+        this.enableTextArea = null;
+        this.editingShapeId = null;
+        this.clearCanvas()
+      }
+     })
+  }
+
+  //-----------------------------for panel(where diffrent stroke, colours, and text styles will be stored)-------------
+  private syncPanel(){
+    let state: PanelState | null = null;
+    if(this.enableTextArea) {
+      state = { kind: "text", fontFamily: this.editingFontFamily}
+    } else if (this.selectedShapeIndex !== null) {
+      const s = this.existingShapes[this.selectedShapeIndex];
+      if (s?.type === "text") {
+        state = {kind: "text", fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY}
+      }
+    }
+    const key = JSON.stringify(state);
+    if(key === this.lastPanelKey) return;
+    this.lastPanelKey = key;
+    this.onPanelChange?.(state)
+  }
+
+  //-------------------------FontFamily----------------------------
+  setFontFamily(family: FontFamily) {
+    this.currentFontFamily = family;
+
+    if(this.enableTextArea) {
+      this.editingFontFamily = family;
+      this.updateEditorFont?.();
+      this.syncPanel();
+      return;
+    }
+
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const s = this.existingShapes[i];
+      if(s.type === "text") {
+        const updated: TextShape = { ...s, fontFamily: family};
+        this.existingShapes[i] = updated;
+        this.socket.send(JSON.stringify({
+          type: "shape_update",
+          shapeId: updated.id,
+          message: JSON.stringify({ shape: updated})
+        }))
+      }
+    }
+    this.clearCanvas();
   }
 }

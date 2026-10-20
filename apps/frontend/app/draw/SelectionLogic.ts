@@ -79,6 +79,13 @@ export class SelectionLogic {
         const maxY = Math.max(...ys);
         return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
       }
+      case "text" : 
+        return {
+          x: shape.x, 
+          y: shape.y, 
+          width: shape.width, 
+          height: shape.height
+        }
       default:
         // an unrecognized shape.type shouldn't be possible (callers filter with isKnownShape),
         // but don't let a bad runtime value crash hit-testing — treat it as empty/unselectable
@@ -175,6 +182,13 @@ export class SelectionLogic {
       case "pencil":
         if (!Array.isArray(shape.points)) return shape;
         return { ...shape, points: shape.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
+      case "text":
+        return {
+          ...shape,
+          x: shape.x + dx,
+          y: shape.y + dy,
+
+        }
       default:
         return shape;
     }
@@ -225,6 +239,10 @@ export class SelectionLogic {
             y: box.y + (p.y - old.y) * sy,
           })),
         };
+      }
+      case "text": {
+        const scale = box.height / shape.height;
+        return { ...shape, x: box.x, y: box.y, width: box.width, height: box.height, fontSize: shape.fontSize * scale };
       }
       default:
         return shape;

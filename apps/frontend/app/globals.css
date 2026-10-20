@@ -48,3 +48,9 @@
     --ring: 224.3 76.3% 48%;
   }
 }
+
+@font-face {
+  font-family: "HandDrawn";
+  src: url("/fonts/Hand-Drawn.woff2") format("woff2");
+  font-display: swap;
+}
