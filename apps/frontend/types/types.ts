@@ -14,4 +14,11 @@ export const FONT_FAMILIES: Record<FontFamily, {label: string; css: string}> = {
 }
 export const DEFAULT_FONT_FAMILY: FontFamily = "sans";
 export const LINE_HEIGHT = 1.2;
-export type PanelState = { kind: "text"; fontFamily: FontFamily }; // TODO: we can extend "kind" to stoke, colour, etc 
+export type FontSizes = "S"| "M" | "L" | "XL";
+export const FONT_SIZES: Record<FontSizes, number> = { S: 16, M: 20, L: 28, XL: 36};
+export const DEFAULT_FONT_SIZE = FONT_SIZES.M 
+export type TextAlign = "left" | "center" | "right";
+export const DEFAULT_TEXT_ALIGN: TextAlign = "left";
+
+export type PanelState = { kind: "text"; fontFamily: FontFamily; fontSize: number, textAlign: TextAlign }; // TODO: we can extend "kind" to stoke, colour, etc.
+

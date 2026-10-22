@@ -1,8 +1,8 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { CaseSensitive, Circle, CodeXml, Diamond, Hand, Minus, MousePointer2, MoveRight, PanelBottom, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Diamond, Hand, Minus, MousePointer2, MoveRight, PanelBottom, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
 import { Game } from "@/app/draw/Game";
-import { FONT_FAMILIES, FontFamily, PanelState } from "@/types/types";
+import { FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, PanelState, TextAlign } from "@/types/types";
 // import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
@@ -17,6 +17,12 @@ const FONT_FAMILY_ICONS: Record<FontFamily, ReactNode> = {
   "hand-drawn": <Pencil className="w-4 h-4" />,
   sans: <CaseSensitive className="w-4 h-4" />,
   code: <CodeXml className="w-4 h-4" />,
+};
+
+const TEXT_ALIGN_ICONS: Record<TextAlign, ReactNode> = {
+  left: <AlignLeft className="w-4 h-4" />,
+  center: <AlignCenter className="w-4 h-4" />,
+  right: <AlignRight className="w-4 h-4" />,
 };
 
 const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
@@ -83,7 +89,14 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
             : "cursor-crosshair"
         }
       ></canvas>
-      <Topbar setSelectedTool={setSelectedTool} selectedTool={selectedTool} panel={panel} onFontFamilyChange={(f) => game?.setFontFamily(f)}/>
+      <Topbar
+        setSelectedTool={setSelectedTool}
+        selectedTool={selectedTool}
+        panel={panel}
+        onFontFamilyChange={(f) => game?.setFontFamily(f)}
+        onFontSizeChange={(s) => game?.setFontSize(s)}
+        onTextAlignChange={(a) => game?.setTextAlign(a)}
+      />
     </div>
   );
 };
@@ -92,12 +105,16 @@ function Topbar({
   selectedTool,
   setSelectedTool,
   panel,
-  onFontFamilyChange
+  onFontFamilyChange,
+  onFontSizeChange,
+  onTextAlignChange
 }: {
   selectedTool: Tool;
   setSelectedTool: (s: Tool) => void;
   panel:PanelState | null;
   onFontFamilyChange: (f: FontFamily) => void;
+  onFontSizeChange: (s: number) => void;
+  onTextAlignChange: (a: TextAlign) => void;
 }) {
   return (
     <div className="fixed top-[10px] left-[10px]">
@@ -194,6 +211,38 @@ function Topbar({
                 }`}
               >
                 {FONT_FAMILY_ICONS[f]}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-gray-400">Font size</span>
+          <div className="flex gap-1.5">
+            {(Object.keys(FONT_SIZES) as FontSizes[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => onFontSizeChange(FONT_SIZES[p])}
+                className={`flex h-8 w-8 items-center justify-center rounded-md border text-sm font-medium transition-colors ${
+                  panel.fontSize === FONT_SIZES[p]
+                    ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                    : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-gray-400">Text align</span>
+          <div className="flex gap-1.5">
+            {(["left", "center", "right"] as TextAlign[]).map((a) => (
+              <button
+                key={a}
+                onClick={() => onTextAlignChange(a)}
+                className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                  panel.textAlign === a
+                    ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                    : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                }`}
+              >
+                {TEXT_ALIGN_ICONS[a]}
               </button>
             ))}
           </div>

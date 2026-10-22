@@ -1,6 +1,6 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, DEFAULT_FONT_FAMILY, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_TEXT_ALIGN, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
@@ -64,7 +64,8 @@ export type Shape = { id: string, rotation: number } & (
       y: number;
       text: string;
       fontSize: number;
-      fontFamily: FontFamily
+      fontFamily: FontFamily,
+      textAlign: TextAlign
       width: number;
       height: number;
     }
@@ -129,7 +130,11 @@ export class Game {
   private onPanelChange?: (state: PanelState | null) => void;
   private lastPanelKey: string = "";
   private editingFontFamily: FontFamily = DEFAULT_FONT_FAMILY;
-  private updateEditorFont: (() => void) | null = null
+  private updateEditorFont: (() => void) | null = null;
+  private currentFontSize: number = DEFAULT_FONT_SIZE;
+  private editingFontSize: number = DEFAULT_FONT_SIZE;
+  private currentTextAlign: TextAlign = DEFAULT_TEXT_ALIGN;
+  private editingTextAlign: TextAlign = DEFAULT_TEXT_ALIGN;
 
   socket: WebSocket;
 
@@ -384,11 +389,14 @@ export class Game {
         this.ArrowShape(shape.x, shape.y, shape.toX, shape.toY);
       } else if (shape.type === "text") {
         const family = shape.fontFamily ?? DEFAULT_FONT_FAMILY;
+        const align = shape.textAlign ?? DEFAULT_TEXT_ALIGN;
         this.ctx.fillStyle = "white";
         this.ctx.font = `${shape.fontSize}px ${FONT_FAMILIES[family].css}`;
         this.ctx.textBaseline = "top";
+        this.ctx.textAlign = align;
+        const tx = align === "center" ? shape.x + shape.width / 2 : align === "right" ? shape.x + shape.width: shape.x
         shape.text.split("\n").forEach((line, i) => {
-          this.ctx.fillText(line, shape.x, shape.y + i * shape.fontSize * LINE_HEIGHT)
+          this.ctx.fillText(line, tx, shape.y + i * shape.fontSize * LINE_HEIGHT)
         });
       }
       } finally {
@@ -981,9 +989,13 @@ export class Game {
       color: "white",
       zIndex: "100"
     })
-    const fontSize = existing?.fontSize ?? 20; //TODO: we should add diffrent fint sizes but for now we should fix it to one
+    const fontSize = existing?.fontSize ?? this.currentFontSize; 
+    this.editingFontSize = fontSize;
     const fontFamily = existing?.fontFamily ?? this.currentFontFamily;
     this.editingFontFamily = fontFamily;
+
+    const textAlign = existing?.textAlign ?? this.currentTextAlign;
+    this.editingTextAlign = textAlign;
     this.syncPanel();
     textArea.style.font = `${fontSize*this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[fontFamily].css}`;
     textArea.style.transform = `translate(${worldX * this.scale + this.panX}px, ${worldY * this.scale + this.panY}px)`
@@ -1020,8 +1032,9 @@ export class Game {
      textArea.addEventListener("input", resize)
 
      this.updateEditorFont = () => {
-      const font = `${fontSize * this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[this.editingFontFamily].css}`;
+      const font = `${this.editingFontSize * this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[this.editingFontFamily].css}`;
       textArea.style.font = font;
+      textArea.style.textAlign = this.editingTextAlign;
       span.style.font = font;
       resize();
      };
@@ -1033,7 +1046,7 @@ export class Game {
       const text = textArea.value.trim();
       // canvas-measured, not DOM-measured — offsetWidth/offsetHeight can read back 0 in edge
       // cases (e.g. a backgrounded tab), which produced a real, zero-area, unselectable shape
-      const { width, height } = this.measureText(text || " ", fontSize, fontFamily);
+      const { width, height } = this.measureText(text || " ", this.editingFontSize, fontFamily);
       this.enableTextArea = null;
       this.updateEditorFont = null;
       this.editingShapeId = null;
@@ -1051,7 +1064,7 @@ export class Game {
           this.existingShapes.splice(i, 1);
           this.socket.send(JSON.stringify({ type: "shape_delete", shapeId: existing.id, roomId: this.roomId }));
         } else {
-          const updated: Shape = { ...existing, text, fontFamily, width, height };
+          const updated: Shape = { ...existing, text, fontFamily, fontSize: this.editingFontSize, textAlign: this.editingTextAlign, width, height };
           this.existingShapes[i] = updated;
           this.socket.send(JSON.stringify({
             type: "shape_update",
@@ -1076,8 +1089,9 @@ export class Game {
         x: worldX,
         y: worldY,
         text,
-        fontSize,
+        fontSize: this.editingFontSize,
         fontFamily: this.currentFontFamily,
+        textAlign: this.editingTextAlign,
         width,
         height,
       };
@@ -1112,11 +1126,11 @@ export class Game {
   private syncPanel(){
     let state: PanelState | null = null;
     if(this.enableTextArea) {
-      state = { kind: "text", fontFamily: this.editingFontFamily}
+      state = { kind: "text", fontFamily: this.editingFontFamily, fontSize: this.editingFontSize, textAlign: this.editingTextAlign}
     } else if (this.selectedShapeIndex !== null) {
       const s = this.existingShapes[this.selectedShapeIndex];
       if (s?.type === "text") {
-        state = {kind: "text", fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY}
+        state = {kind: "text", fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY, fontSize: s.fontSize ?? DEFAULT_FONT_SIZE, textAlign: s.textAlign ?? DEFAULT_TEXT_ALIGN}
       }
     }
     const key = JSON.stringify(state);
@@ -1145,10 +1159,67 @@ export class Game {
         this.socket.send(JSON.stringify({
           type: "shape_update",
           shapeId: updated.id,
-          message: JSON.stringify({ shape: updated})
+          message: JSON.stringify({ shape: updated}),
+          roomId: this.roomId,
         }))
       }
     }
     this.clearCanvas();
+  }
+
+  setFontSize(size: number) {
+    this.currentFontSize = size;
+
+    if(this.enableTextArea) {
+      this.editingFontSize = size;
+      this.updateEditorFont?.();
+      this.syncPanel();
+      return;
+    }
+
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const s = this.existingShapes[i];
+      if(s.type === "text") {
+        const {width, height} = this.measureText(s.text, size, s.fontFamily ?? DEFAULT_FONT_FAMILY);
+        const updated: TextShape = { ...s, fontSize: size, width, height};
+
+        this.existingShapes[i] = updated;
+        this.socket.send(JSON.stringify({
+          type: "shape_update",
+          shapeId: updated.id,
+          message: JSON.stringify({ shape: updated }),
+          roomId: this.roomId,
+        }))
+      }
+    }
+    this.clearCanvas();
+  }
+
+  setTextAlign(align: TextAlign) {
+    this.currentTextAlign = align;
+
+    if(this.enableTextArea) {
+      this.editingTextAlign = align;
+      this.updateEditorFont?.();
+      this.syncPanel();
+      return
+    }
+
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const s = this.existingShapes[i];
+      if(s.type === "text") {
+        const updated: TextShape = {...s, textAlign: align};
+        this.existingShapes[i] = updated;
+        this.socket.send(JSON.stringify({
+          type: "shape_update",
+          shapeId: updated.id,
+          message: JSON.stringify({ shape: updated }),
+          roomId: this.roomId,
+        }))
+      }
+    }
+    this.clearCanvas()
   }
 }
