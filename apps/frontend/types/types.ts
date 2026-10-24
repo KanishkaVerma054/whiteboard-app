@@ -20,5 +20,23 @@ export const DEFAULT_FONT_SIZE = FONT_SIZES.M
 export type TextAlign = "left" | "center" | "right";
 export const DEFAULT_TEXT_ALIGN: TextAlign = "left";
 
-export type PanelState = { kind: "text"; fontFamily: FontFamily; fontSize: number, textAlign: TextAlign }; // TODO: we can extend "kind" to stoke, colour, etc.
+//----------------------Stroke Colours--------------------------------
+export const STROKE_COLOURS = ["#ffffff", "#e03131", "#2f9e44", "#1971c2", "#f08c00"]
+export const DEFAULT_STROKE_COLOUR = STROKE_COLOURS[0];
+
+//----------------------Stroke Width--------------------------------
+export type StrokeWidth = "thin" | "medium" | "bold";
+export const STROKE_WIDTHS: Record<StrokeWidth, number> = { thin: 1, medium: 2, bold: 4}
+export const DEFAULT_STROKE_WIDTH = STROKE_WIDTHS.thin
+
+//----------------------Stroke styles--------------------------------
+export type StrokeStyle = "solid" | "dashed" | "dotted";
+export const DEFAULT_STROKE_STYLE: StrokeStyle = "solid"
+
+export type PanelState = {
+    strokeColor: string;
+    strokeWidth?: number;
+    strokeStyle?: StrokeStyle;
+    text?: { fontFamily: FontFamily; fontSize: number; textAlign: TextAlign };
+};
 

@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
 import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Diamond, Hand, Minus, MousePointer2, MoveRight, PanelBottom, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
 import { Game } from "@/app/draw/Game";
-import { FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, PanelState, TextAlign } from "@/types/types";
+import { FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, PanelState, STROKE_COLOURS, STROKE_WIDTHS, StrokeStyle, StrokeWidth, TextAlign } from "@/types/types";
 // import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
@@ -96,6 +96,9 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
         onFontFamilyChange={(f) => game?.setFontFamily(f)}
         onFontSizeChange={(s) => game?.setFontSize(s)}
         onTextAlignChange={(a) => game?.setTextAlign(a)}
+        onStrokeColorChange={(c) => game?.setStrokeColour(c)}
+        onStrokeWidthChange={(w) => game?.setStrokeWidth(w)}
+        onStrokeStyleChange={(s) => game?.setStrokeStyle(s)}
       />
     </div>
   );
@@ -107,7 +110,10 @@ function Topbar({
   panel,
   onFontFamilyChange,
   onFontSizeChange,
-  onTextAlignChange
+  onTextAlignChange,
+  onStrokeColorChange,
+  onStrokeWidthChange,
+  onStrokeStyleChange
 }: {
   selectedTool: Tool;
   setSelectedTool: (s: Tool) => void;
@@ -115,7 +121,13 @@ function Topbar({
   onFontFamilyChange: (f: FontFamily) => void;
   onFontSizeChange: (s: number) => void;
   onTextAlignChange: (a: TextAlign) => void;
+  onStrokeColorChange: (c: string) => void;
+  onStrokeWidthChange: (w: number) => void;
+  onStrokeStyleChange: (s: StrokeStyle) => void;
 }) {
+  // a plain local const narrows correctly inside the .map() closures below;
+  // `panel.text && (...)` does not, since TS can't track a property access through a closure
+  const text = panel?.text;
   return (
     <div className="fixed top-[10px] left-[10px]">
       <div className="flex gap-2">
@@ -192,60 +204,123 @@ function Topbar({
           }}
         ></IconButton>
       </div>
-      {panel?.kind === "text" && (
+      {panel && (
         <div
           className="flex flex-col gap-1.5 mt-2 w-fit rounded-lg border border-neutral-700 bg-neutral-900 p-3 text-white"
           onMouseDown={(e) => e.preventDefault()}
         >
-          <span className="text-xs text-gray-400">Font family</span>
+          <span className="text-xs text-gray-400">Stroke</span>
           <div className="flex gap-1.5">
-            {(Object.keys(FONT_FAMILIES) as FontFamily[]).map((f) => (
+            {STROKE_COLOURS.map((c) => (
               <button
-                key={f}
-                title={FONT_FAMILIES[f].label}
-                onClick={() => onFontFamilyChange(f)}
-                className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
-                  panel.fontFamily === f
-                    ? "border-blue-400 bg-blue-500/20 text-blue-300"
-                    : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                key={c}
+                title={c}
+                onClick={() => onStrokeColorChange(c)}
+                style={{ backgroundColor: c }}
+                className={`h-6 w-6 rounded-md border-2 transition-all ${
+                  panel.strokeColor === c ? "border-blue-400 scale-110" : "border-neutral-700"
                 }`}
-              >
-                {FONT_FAMILY_ICONS[f]}
-              </button>
+              />
             ))}
           </div>
-          <span className="text-xs text-gray-400">Font size</span>
-          <div className="flex gap-1.5">
-            {(Object.keys(FONT_SIZES) as FontSizes[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => onFontSizeChange(FONT_SIZES[p])}
-                className={`flex h-8 w-8 items-center justify-center rounded-md border text-sm font-medium transition-colors ${
-                  panel.fontSize === FONT_SIZES[p]
-                    ? "border-blue-400 bg-blue-500/20 text-blue-300"
-                    : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
-                }`}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-          <span className="text-xs text-gray-400">Text align</span>
-          <div className="flex gap-1.5">
-            {(["left", "center", "right"] as TextAlign[]).map((a) => (
-              <button
-                key={a}
-                onClick={() => onTextAlignChange(a)}
-                className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
-                  panel.textAlign === a
-                    ? "border-blue-400 bg-blue-500/20 text-blue-300"
-                    : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
-                }`}
-              >
-                {TEXT_ALIGN_ICONS[a]}
-              </button>
-            ))}
-          </div>
+
+          {panel.strokeWidth !== undefined && (
+            <>
+              <span className="text-xs text-gray-400">Stroke width</span>
+              <div className="flex gap-1.5">
+                {(Object.keys(STROKE_WIDTHS) as StrokeWidth[]).map((p) => (
+                  <button
+                    key={p}
+                    title={p}
+                    onClick={() => onStrokeWidthChange(STROKE_WIDTHS[p])}
+                    className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                      panel.strokeWidth === STROKE_WIDTHS[p]
+                        ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                        : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                    }`}
+                  >
+                    <div className="w-4 rounded-full bg-current" style={{ height: `${STROKE_WIDTHS[p] * 2}px` }} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {panel.strokeStyle !== undefined && (
+            <>
+              <span className="text-xs text-gray-400">Stroke style</span>
+              <div className="flex gap-1.5">
+                {(["solid", "dashed", "dotted"] as StrokeStyle[]).map((s) => (
+                  <button
+                    key={s}
+                    title={s}
+                    onClick={() => onStrokeStyleChange(s)}
+                    className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                      panel.strokeStyle === s
+                        ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                        : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                    }`}
+                  >
+                    <div className="w-4" style={{ borderTopWidth: 2, borderTopStyle: s, borderColor: "currentColor" }} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {text && (
+            <>
+              <span className="text-xs text-gray-400">Font family</span>
+              <div className="flex gap-1.5">
+                {(Object.keys(FONT_FAMILIES) as FontFamily[]).map((f) => (
+                  <button
+                    key={f}
+                    title={FONT_FAMILIES[f].label}
+                    onClick={() => onFontFamilyChange(f)}
+                    className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                      text.fontFamily === f
+                        ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                        : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                    }`}
+                  >
+                    {FONT_FAMILY_ICONS[f]}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-gray-400">Font size</span>
+              <div className="flex gap-1.5">
+                {(Object.keys(FONT_SIZES) as FontSizes[]).map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => onFontSizeChange(FONT_SIZES[p])}
+                    className={`flex h-8 w-8 items-center justify-center rounded-md border text-sm font-medium transition-colors ${
+                      text.fontSize === FONT_SIZES[p]
+                        ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                        : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-gray-400">Text align</span>
+              <div className="flex gap-1.5">
+                {(["left", "center", "right"] as TextAlign[]).map((a) => (
+                  <button
+                    key={a}
+                    onClick={() => onTextAlignChange(a)}
+                    className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                      text.textAlign === a
+                        ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                        : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                    }`}
+                  >
+                    {TEXT_ALIGN_ICONS[a]}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

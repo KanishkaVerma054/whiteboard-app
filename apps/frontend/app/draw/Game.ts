@@ -1,6 +1,6 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_TEXT_ALIGN, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
@@ -9,13 +9,15 @@ import { SelectionLogic, type HandleName } from "./SelectionLogic";
 // `id` mirrors the owning Chat row's `shapeId` — how the backend finds this shape again to
 // persist a move/resize/delete. Every shape, old or new, is guaranteed to have one (see
 // getExistingShapes in http.ts and the backfill of legacy rows).
-export type Shape = { id: string, rotation: number } & (
+export type Shape = { id: string, rotation: number, strokeColour: string } & (
   | {
       type: "rect";
       x: number;
       y: number;
       width: number;
       height: number;
+      strokeWidth: number;
+      strokeStyle: StrokeStyle;
     }
   | {
       type: "circle";
@@ -23,6 +25,8 @@ export type Shape = { id: string, rotation: number } & (
       y: number;
       radiusX: number;
       radiusY: number;
+      strokeWidth: number;
+      strokeStyle: StrokeStyle;
     }
   | {
       type: "pencil";
@@ -30,6 +34,8 @@ export type Shape = { id: string, rotation: number } & (
         x: number;
         y: number;
       }[];
+      strokeWidth: number;
+      strokeStyle: StrokeStyle;
     }
   | {
       type: "line";
@@ -37,12 +43,16 @@ export type Shape = { id: string, rotation: number } & (
       startY: number;
       endX: number;
       endY: number;
+      strokeWidth: number;
+      strokeStyle: StrokeStyle;
     }
   | {
       type: "triangle";
       x: number;
       y: number;
       side: number; // side of equilatral triangle
+      strokeWidth: number;
+      strokeStyle: StrokeStyle;
     }
   | {
       type: "diamond";
@@ -50,6 +60,8 @@ export type Shape = { id: string, rotation: number } & (
       y: number;
       width: number;
       height: number;
+      strokeWidth: number;
+      strokeStyle: StrokeStyle;
     }
   | {
       type: "arrow";
@@ -57,6 +69,8 @@ export type Shape = { id: string, rotation: number } & (
       y: number;
       toX: number;
       toY: number;
+      strokeWidth: number;
+      strokeStyle: StrokeStyle;
     }
   | {
       type: "text";
@@ -135,6 +149,10 @@ export class Game {
   private editingFontSize: number = DEFAULT_FONT_SIZE;
   private currentTextAlign: TextAlign = DEFAULT_TEXT_ALIGN;
   private editingTextAlign: TextAlign = DEFAULT_TEXT_ALIGN;
+  private currentStrokeColour: string = DEFAULT_STROKE_COLOUR;
+  private editingStrokeColour: string = DEFAULT_STROKE_COLOUR;
+  private currentStrokeWidth: number = DEFAULT_STROKE_WIDTH;
+  private currentStrokeStyle: StrokeStyle = DEFAULT_STROKE_STYLE;
 
   socket: WebSocket;
 
@@ -309,7 +327,7 @@ export class Game {
     // whatever strokeStyle a previous draw call happened to leave on the context (only "rect"
     // ever set it itself, so on a fresh canvas every other shape type drew invisibly in the
     // default black, matching the background, until *something* else set it to white first).
-    this.ctx.strokeStyle = "rgba(255, 255, 255)";
+    //TODO: this.ctx.strokeStyle = "rgba(255, 255, 255)";
 
     // Redraws Existing Shapes
     this.existingShapes.forEach((shape) => {
@@ -341,9 +359,18 @@ export class Game {
       this.ctx.translate(cx, cy);
       this.ctx.rotate(shape.rotation);
       this.ctx.translate(-cx, -cy);
+      this.ctx.strokeStyle = shape.strokeColour ?? DEFAULT_STROKE_COLOUR;
+      this.ctx.lineWidth = shape.type !== "text" ? (shape.strokeWidth ?? DEFAULT_STROKE_WIDTH) : this.ctx.lineWidth;
+      const strokeWidth = shape.type !== "text" ? (shape.strokeWidth ?? DEFAULT_STROKE_WIDTH) : DEFAULT_STROKE_WIDTH;
+      const strokeStyle = shape.type !== "text" ? (shape.strokeStyle ?? DEFAULT_STROKE_STYLE) : "solid";
+      this.ctx.setLineDash(
+        strokeStyle === "dashed" ? [strokeWidth * 8, strokeWidth * 2]
+        : strokeStyle === "dotted" ? [strokeWidth, strokeWidth * 2]
+        : []
+      );
       // Drawing logic of each shape type
       if (shape.type === "rect") {
-        this.ctx.strokeStyle = "rgba(255, 255, 255)";
+        // this.ctx.strokeStyle = "rgba(255, 255, 255)";
         this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
       } else if (shape.type === "circle") {
         this.ctx.beginPath();
@@ -390,7 +417,7 @@ export class Game {
       } else if (shape.type === "text") {
         const family = shape.fontFamily ?? DEFAULT_FONT_FAMILY;
         const align = shape.textAlign ?? DEFAULT_TEXT_ALIGN;
-        this.ctx.fillStyle = "white";
+        this.ctx.fillStyle = shape.strokeColour ?? DEFAULT_STROKE_COLOUR;
         this.ctx.font = `${shape.fontSize}px ${FONT_FAMILIES[family].css}`;
         this.ctx.textBaseline = "top";
         this.ctx.textAlign = align;
@@ -511,6 +538,9 @@ export class Game {
       shape = {
         id: newShapeId,
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
+        strokeWidth: this.currentStrokeWidth,
+        strokeStyle: this.currentStrokeStyle,
         type: "rect",
         x: this.startX,
         y: this.startY,
@@ -526,6 +556,9 @@ export class Game {
       shape = {
         id: newShapeId,
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
+        strokeWidth: this.currentStrokeWidth,
+        strokeStyle: this.currentStrokeStyle,
         type: "circle",
         x: this.startX + dx / 2,
         y: this.startY + dy / 2,
@@ -536,6 +569,9 @@ export class Game {
       shape = {
         id: newShapeId,
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
+        strokeWidth: this.currentStrokeWidth,
+        strokeStyle: this.currentStrokeStyle,
         type: "line",
         startX: this.startX,
         startY: this.startY,
@@ -547,6 +583,9 @@ export class Game {
       shape = {
         id: newShapeId,
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
+        strokeWidth: this.currentStrokeWidth,
+        strokeStyle: this.currentStrokeStyle,
         type: "triangle",
         x: this.startX,
         y: this.startY,
@@ -559,6 +598,9 @@ export class Game {
       shape = {
         id: newShapeId,
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
+        strokeWidth: this.currentStrokeWidth,
+        strokeStyle: this.currentStrokeStyle,
         type: "pencil",
         points: this.currentPencilStroke,
       };
@@ -576,6 +618,9 @@ export class Game {
       shape = {
         id: newShapeId,
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
+        strokeWidth: this.currentStrokeWidth,
+        strokeStyle: this.currentStrokeStyle,
         type: "diamond",
         x: cx,
         y: cy,
@@ -586,6 +631,9 @@ export class Game {
       shape = {
         id: newShapeId,
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
+        strokeWidth: this.currentStrokeWidth,
+        strokeStyle: this.currentStrokeStyle,
         type: "arrow",
         x: this.startX,
         y: this.startY,
@@ -624,7 +672,14 @@ export class Game {
       const height = curY - this.startY;
       this.clearCanvas();
 
-      this.ctx.strokeStyle = "rgba(255, 255, 255)";
+      this.ctx.strokeStyle = this.currentStrokeColour;
+      this.ctx.lineWidth = this.currentStrokeWidth;
+
+      this.ctx.setLineDash(
+        this.currentStrokeStyle === "dashed" ? [this.currentStrokeWidth * 8, this.currentStrokeWidth * 2]
+        : this.currentStrokeStyle === "dotted" ? [this.currentStrokeWidth, this.currentStrokeWidth * 2]
+        : []
+      );
 
       if (selectedTool === "rect") {
         this.ctx.strokeRect(this.startX, this.startY, width, height);
@@ -993,9 +1048,12 @@ export class Game {
     this.editingFontSize = fontSize;
     const fontFamily = existing?.fontFamily ?? this.currentFontFamily;
     this.editingFontFamily = fontFamily;
-
     const textAlign = existing?.textAlign ?? this.currentTextAlign;
     this.editingTextAlign = textAlign;
+
+    const strokeColour = existing?.strokeColour ?? this.currentStrokeColour;
+    this.editingStrokeColour = strokeColour;
+    textArea.style.color = strokeColour;
     this.syncPanel();
     textArea.style.font = `${fontSize*this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[fontFamily].css}`;
     textArea.style.transform = `translate(${worldX * this.scale + this.panX}px, ${worldY * this.scale + this.panY}px)`
@@ -1035,6 +1093,7 @@ export class Game {
       const font = `${this.editingFontSize * this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[this.editingFontFamily].css}`;
       textArea.style.font = font;
       textArea.style.textAlign = this.editingTextAlign;
+      textArea.style.color = this.editingStrokeColour
       span.style.font = font;
       resize();
      };
@@ -1085,6 +1144,7 @@ export class Game {
       const shape: Shape = {
         id: crypto.randomUUID(),
         rotation: 0,
+        strokeColour: this.currentStrokeColour,
         type: "text",
         x: worldX,
         y: worldY,
@@ -1126,11 +1186,18 @@ export class Game {
   private syncPanel(){
     let state: PanelState | null = null;
     if(this.enableTextArea) {
-      state = { kind: "text", fontFamily: this.editingFontFamily, fontSize: this.editingFontSize, textAlign: this.editingTextAlign}
+      state = {strokeColor: this.editingStrokeColour, text: {fontFamily: this.editingFontFamily, fontSize: this.editingFontSize, textAlign: this.editingTextAlign}}
     } else if (this.selectedShapeIndex !== null) {
       const s = this.existingShapes[this.selectedShapeIndex];
-      if (s?.type === "text") {
-        state = {kind: "text", fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY, fontSize: s.fontSize ?? DEFAULT_FONT_SIZE, textAlign: s.textAlign ?? DEFAULT_TEXT_ALIGN}
+      if (s) {
+        state = {
+          strokeColor: s.strokeColour ?? DEFAULT_STROKE_COLOUR,
+          strokeWidth: s.type !== "text" ? (s.strokeWidth ?? DEFAULT_STROKE_WIDTH) : undefined,
+          strokeStyle: s.type !== "text" ? (s.strokeStyle ?? DEFAULT_STROKE_STYLE) : undefined,
+          text: s.type === "text"
+            ? { fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY, fontSize: s.fontSize ?? DEFAULT_FONT_SIZE, textAlign: s.textAlign ?? DEFAULT_TEXT_ALIGN }
+            : undefined,
+        };
       }
     }
     const key = JSON.stringify(state);
@@ -1221,5 +1288,67 @@ export class Game {
       }
     }
     this.clearCanvas()
+  }
+  setStrokeColour(colour: string) {
+    this.currentStrokeColour = colour;
+
+    if(this.enableTextArea) {
+      this.editingStrokeColour = colour;
+      this.updateEditorFont?.();
+      this.syncPanel();
+      return;
+    }
+
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const updated = {...this.existingShapes[i], strokeColour: colour}
+      this.existingShapes[i] = updated;
+      this.socket.send(JSON.stringify({
+        type: "shape_update",
+        shapeId: updated.id,
+        message: JSON.stringify({shape:updated}),
+        roomId: this.roomId,
+      }))
+    }
+    this.clearCanvas();
+  }
+
+  setStrokeWidth(width: number) {
+    this.currentStrokeWidth = width;
+
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const s = this.existingShapes[i];
+      if(s.type !== "text") {
+        const updated = { ...s, strokeWidth: width};
+        this.existingShapes[i] = updated;
+        this.socket.send(JSON.stringify({
+          type: "shape_update",
+          shapeId: updated.id,
+          message: JSON.stringify({ shape: updated }),
+          roomId: this.roomId,
+        }))
+      }
+    }
+    this.clearCanvas();
+  }
+  setStrokeStyle(style: StrokeStyle) {
+    this.currentStrokeStyle = style;
+
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const s = this.existingShapes[i];
+      if(s.type !== "text") {
+        const updated = { ...s, strokeStyle: style};
+        this.existingShapes[i] = updated;
+        this.socket.send(JSON.stringify({
+          type: "shape_update",
+          shapeId: updated.id,
+          message: JSON.stringify({ shape: updated }),
+          roomId: this.roomId,
+        }))
+      }
+    }
+    this.clearCanvas();
   }
 }
