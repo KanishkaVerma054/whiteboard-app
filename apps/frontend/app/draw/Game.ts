@@ -1,6 +1,6 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, DEFAULT_BG_FILL, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_EDGE, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeEdge, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
@@ -18,6 +18,8 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       height: number;
       strokeWidth: number;
       strokeStyle: StrokeStyle;
+      strokeEdge: StrokeEdge;
+      bgFill: string;
     }
   | {
       type: "circle";
@@ -27,6 +29,8 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       radiusY: number;
       strokeWidth: number;
       strokeStyle: StrokeStyle;
+      bgFill: string;
+      strokeEdge: StrokeEdge; 
     }
   | {
       type: "pencil";
@@ -36,6 +40,7 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       }[];
       strokeWidth: number;
       strokeStyle: StrokeStyle;
+      bgFill: string;
     }
   | {
       type: "line";
@@ -53,6 +58,8 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       side: number; // side of equilatral triangle
       strokeWidth: number;
       strokeStyle: StrokeStyle;
+      bgFill: string;
+      strokeEdge: StrokeEdge; 
     }
   | {
       type: "diamond";
@@ -62,6 +69,8 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       height: number;
       strokeWidth: number;
       strokeStyle: StrokeStyle;
+      bgFill: string;
+      strokeEdge: StrokeEdge; 
     }
   | {
       type: "arrow";
@@ -153,6 +162,8 @@ export class Game {
   private editingStrokeColour: string = DEFAULT_STROKE_COLOUR;
   private currentStrokeWidth: number = DEFAULT_STROKE_WIDTH;
   private currentStrokeStyle: StrokeStyle = DEFAULT_STROKE_STYLE;
+  private currentBgFill: string = DEFAULT_BG_FILL;
+  private currentStrokeEdge: StrokeEdge = DEFAULT_STROKE_EDGE;
 
   socket: WebSocket;
 
@@ -371,7 +382,22 @@ export class Game {
       // Drawing logic of each shape type
       if (shape.type === "rect") {
         // this.ctx.strokeStyle = "rgba(255, 255, 255)";
-        this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
+        const edge = shape.strokeEdge ?? DEFAULT_STROKE_EDGE;
+        const x = Math.min(shape.x, shape.x + shape.width)
+        const y = Math.min(shape.y, shape.y + shape.height);
+        const w = Math.abs(shape.width);
+        const h = Math.abs(shape.height);
+        let radius = 0;
+        if(edge === "round") {
+          radius = Math.min(Math.max(w, h) / 20, w / 2, h / 2);
+        }
+        this.ctx.beginPath();
+        this.ctx.roundRect(x, y, w, h, radius);
+        this.ctx.fillStyle = shape.bgFill ?? DEFAULT_BG_FILL;
+        this.ctx.fill();
+        this.ctx.stroke();
+        // this.ctx.fillRect(shape.x, shape.y, shape.width, shape.height);
+        // this.ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
       } else if (shape.type === "circle") {
         this.ctx.beginPath();
         this.ctx.ellipse(
@@ -383,6 +409,8 @@ export class Game {
           0, // here 0 is the rotation of the ellipse
           Math.PI * 2
         );
+        this.ctx.fillStyle = shape.bgFill ?? DEFAULT_BG_FILL;
+        this.ctx.fill();
         this.ctx.closePath();
         this.ctx.stroke();
       } else if (shape.type === "line") {
@@ -391,14 +419,30 @@ export class Game {
         this.ctx.lineTo(shape.endX, shape.endY);
         this.ctx.stroke();
       } else if (shape.type === "triangle") {
-        this.ctx.beginPath();
-
+        
         const height = (shape.side * Math.sqrt(3)) / 2;
-        this.ctx.moveTo(shape.x + shape.side / 2, shape.y);
-        this.ctx.lineTo(shape.x, shape.y + height);
-        this.ctx.lineTo(shape.x + shape.side, shape.y + height);
+        const vertices = [
+          { x: shape.x + shape.side / 2, y: shape.y },
+          { x: shape.x, y: shape.y + height },
+          { x: shape.x + shape.side, y: shape.y + height }
+        ];
+        const edge = shape.strokeEdge ?? DEFAULT_STROKE_EDGE;
+        let radius = 0;
+        if(edge === "round") {
+          radius = Math.max(0, Math.min(shape.side / 20, height / 2));
+        }
 
-        this.ctx.closePath();
+         this.ctx.beginPath();
+         this.tracePolygonPath(vertices, radius);
+        // const height = (shape.side * Math.sqrt(3)) / 2;
+        // this.ctx.moveTo(shape.x + shape.side / 2, shape.y);
+        // this.ctx.lineTo(shape.x, shape.y + height);
+        // this.ctx.lineTo(shape.x + shape.side, shape.y + height);
+
+        this.ctx.fillStyle = shape.bgFill ?? DEFAULT_BG_FILL;
+        this.ctx.fill();
+
+        // this.ctx.closePath();
         this.ctx.stroke();
       } else if (shape.type === "pencil" && Array.isArray(shape.points)) {
         if (shape.points && shape.points.length > 1) {
@@ -407,11 +451,24 @@ export class Game {
           shape.points.forEach((point) => {
             this.ctx.lineTo(point.x, point.y);
           });
+
+          //----applying bg fill logic for pencil------
+          if(SelectionLogic.isPencilPathClosed(shape.points)) {
+            this.ctx.fillStyle  =shape.bgFill ?? DEFAULT_BG_FILL;
+            this.ctx.fill();
+          }
           this.ctx.stroke();
           // this.ctx.closePath();
         }
       } else if (shape.type === "diamond") {
-        this.DiamondShape(shape.x, shape.y, shape.width, shape.height);
+        this.ctx.fillStyle = shape.bgFill ?? DEFAULT_BG_FILL;
+        const edge = shape.strokeEdge ?? DEFAULT_STROKE_EDGE;
+        const sideLength = Math.min(Math.hypot(shape.width / 2, shape.height / 2), shape.width, shape.height)
+        let radius = 0;
+        if(edge === "round") {
+          radius = Math.max(0, Math.min(sideLength * 0.08, Math.min(shape.width, shape.height) * 0.15))
+        }
+        this.DiamondShape(shape.x, shape.y, shape.width, shape.height, radius);
       } else if (shape.type === "arrow") {
         this.ArrowShape(shape.x, shape.y, shape.toX, shape.toY);
       } else if (shape.type === "text") {
@@ -541,6 +598,8 @@ export class Game {
         strokeColour: this.currentStrokeColour,
         strokeWidth: this.currentStrokeWidth,
         strokeStyle: this.currentStrokeStyle,
+        bgFill: this.currentBgFill,
+        strokeEdge: this.currentStrokeEdge,
         type: "rect",
         x: this.startX,
         y: this.startY,
@@ -559,6 +618,8 @@ export class Game {
         strokeColour: this.currentStrokeColour,
         strokeWidth: this.currentStrokeWidth,
         strokeStyle: this.currentStrokeStyle,
+        strokeEdge: this.currentStrokeEdge,
+        bgFill: this.currentBgFill,
         type: "circle",
         x: this.startX + dx / 2,
         y: this.startY + dy / 2,
@@ -579,16 +640,21 @@ export class Game {
         endY,
       };
     } else if (selectedTool === "triangle") {
-      const triSide = Math.max(width, height);
+      const triSide = Math.max(Math.abs(width), Math.abs(height));
+      const triHeight = (triSide * Math.sqrt(3)) / 2;
+      const triX = width < 0 ? this.startX - triSide : this.startX;
+      const triY = height < 0 ? this.startY - triHeight : this.startY;
       shape = {
         id: newShapeId,
         rotation: 0,
         strokeColour: this.currentStrokeColour,
         strokeWidth: this.currentStrokeWidth,
         strokeStyle: this.currentStrokeStyle,
+        bgFill: this.currentBgFill,
+        strokeEdge: this.currentStrokeEdge,
         type: "triangle",
-        x: this.startX,
-        y: this.startY,
+        x: triX,
+        y: triY,
         side: triSide,
       };
     } else if (
@@ -601,6 +667,7 @@ export class Game {
         strokeColour: this.currentStrokeColour,
         strokeWidth: this.currentStrokeWidth,
         strokeStyle: this.currentStrokeStyle,
+        bgFill: this.currentBgFill,
         type: "pencil",
         points: this.currentPencilStroke,
       };
@@ -621,6 +688,8 @@ export class Game {
         strokeColour: this.currentStrokeColour,
         strokeWidth: this.currentStrokeWidth,
         strokeStyle: this.currentStrokeStyle,
+        bgFill: this.currentBgFill,
+        strokeEdge: this.currentStrokeEdge,
         type: "diamond",
         x: cx,
         y: cy,
@@ -674,7 +743,8 @@ export class Game {
 
       this.ctx.strokeStyle = this.currentStrokeColour;
       this.ctx.lineWidth = this.currentStrokeWidth;
-
+      this.ctx.fillStyle = this.currentBgFill;
+      
       this.ctx.setLineDash(
         this.currentStrokeStyle === "dashed" ? [this.currentStrokeWidth * 8, this.currentStrokeWidth * 2]
         : this.currentStrokeStyle === "dotted" ? [this.currentStrokeWidth, this.currentStrokeWidth * 2]
@@ -682,7 +752,20 @@ export class Game {
       );
 
       if (selectedTool === "rect") {
-        this.ctx.strokeRect(this.startX, this.startY, width, height);
+        // this.ctx.fillRect(this.startX, this.startY, width, height)
+        // this.ctx.strokeRect(this.startX, this.startY, width, height);
+        const x = Math.min(this.startX, this.startX + width);
+        const y = Math.min(this.startY, this.startY + height);
+        const w = Math.abs(width);
+        const h = Math.abs(height);
+        let radius = 0;
+        if (this.currentStrokeEdge === "round") {
+          radius = Math.min(Math.max(w, h) / 20, w / 2, h / 2);
+        }
+        this.ctx.beginPath();
+        this.ctx.roundRect(x, y, w, h, radius);
+        this.ctx.fill();
+        this.ctx.stroke();
       } else if (selectedTool === "circle") {
         // const radius = Math.max(width, height) / 2;
         // const centerX = this.startX + radius;
@@ -705,6 +788,7 @@ export class Game {
           0,
           Math.PI * 2
         );
+        this.ctx.fill();
         this.ctx.closePath();
         this.ctx.stroke();
       } else if (selectedTool === "line") {
@@ -713,15 +797,33 @@ export class Game {
         this.ctx.lineTo(curX, curY);
         this.ctx.stroke();
       } else if (selectedTool === "triangle") {
-        this.ctx.beginPath();
+        // this.ctx.beginPath();
 
+        // const side = Math.max(Math.abs(width), Math.abs(height));
+        // const triangleHeight = (side * Math.sqrt(3)) / 2;
+
+        // this.ctx.moveTo(this.startX + side / 2, this.startY);
+        // this.ctx.lineTo(this.startX, this.startY + triangleHeight);
+        // this.ctx.lineTo(this.startX + side, this.startY + triangleHeight);
+        // this.ctx.fill();
+        // this.ctx.closePath();
+        // this.ctx.stroke();
         const side = Math.max(Math.abs(width), Math.abs(height));
         const triangleHeight = (side * Math.sqrt(3)) / 2;
-
-        this.ctx.moveTo(this.startX + side / 2, this.startY);
-        this.ctx.lineTo(this.startX, this.startY + triangleHeight);
-        this.ctx.lineTo(this.startX + side, this.startY + triangleHeight);
-        this.ctx.closePath();
+        const triX = width < 0 ? this.startX - side : this.startX;
+        const triY = height < 0 ? this.startY - triangleHeight : this.startY;
+        const vertices = [
+          { x: triX + side / 2, y: triY },
+          { x: triX, y: triY + triangleHeight },
+          { x: triX + side, y: triY + triangleHeight },
+        ];
+        let radius = 0;
+        if (this.currentStrokeEdge === "round") {
+          radius = Math.max(0, Math.min(side / 20, triangleHeight / 2));
+        }
+        this.ctx.beginPath();
+        this.tracePolygonPath(vertices, radius);
+        this.ctx.fill();
         this.ctx.stroke();
       } else if (selectedTool === "pencil") {
         this.currentPencilStroke.push({ x: curX, y: curY });
@@ -736,16 +838,28 @@ export class Game {
         this.ctx.stroke();
         // this.ctx.closePath();
       } else if (selectedTool === "diamond") {
+        // const dx = curX - this.startX;
+        // const dy = curY - this.startY;
+
+        // // center point calculation
+        // const cx = this.startX + dx/2;
+        // const cy = this.startY + dy/2;
+
+        // const width = Math.abs(dx);
+        // const height = Math.abs(dy);
+        // this.DiamondShape(cx, cy, width, height);
         const dx = curX - this.startX;
         const dy = curY - this.startY;
-
-        // center point calculation
-        const cx = this.startX + dx/2;
-        const cy = this.startY + dy/2;
-
+        const cx = this.startX + dx / 2;
+        const cy = this.startY + dy / 2;
         const width = Math.abs(dx);
         const height = Math.abs(dy);
-        this.DiamondShape(cx, cy, width, height);
+        const sideLength = Math.min(Math.hypot(width / 2, height / 2), width, height);
+        let radius = 0;
+        if (this.currentStrokeEdge === "round") {
+          radius = Math.max(0, Math.min(sideLength * 0.08, Math.min(width, height) * 0.15));
+        }
+        this.DiamondShape(cx, cy, width, height, radius);
       } else if (selectedTool === "arrow") {
         this.ArrowShape(this.startX, this.startY, curX, curY)
       } else if (selectedTool === "select") {
@@ -854,28 +968,32 @@ export class Game {
 
   // TODO:-----------Shape Logic...will be moved to saperate file later on----------------
 
-  DiamondShape(centerX: number, centerY: number, width: number, height: number) {
+  DiamondShape(centerX: number, centerY: number, width: number, height: number, radius = 0) {
     const halfWidth = width / 2;
     const halfHeight = height / 2;
     
-    const topX = centerX;
-    const topY = centerY - halfHeight;
+    // const topX = centerX;
+    // const topY = centerY - halfHeight;
 
-    const rightX = centerX + halfWidth;
-    const rightY = centerY;
+    // const rightX = centerX + halfWidth;
+    // const rightY = centerY;
 
-    const bottomX = centerX;
-    const bottomY = centerY + halfHeight;
+    // const bottomX = centerX;
+    // const bottomY = centerY + halfHeight;
 
-    const leftX = centerX - halfWidth;
-    const leftY = centerY;
+    // const leftX = centerX - halfWidth;
+    // const leftY = centerY;
+
+    const vertices = [
+      { x: centerX, y: centerY - halfHeight },
+      { x: centerX + halfWidth, y: centerY },
+      { x: centerX, y: centerY + halfHeight},
+      { x: centerX - halfWidth, y: centerY}
+    ];
 
     this.ctx.beginPath();
-    this.ctx.moveTo(topX, topY);
-    this.ctx.lineTo(rightX, rightY);
-    this.ctx.lineTo(bottomX, bottomY);
-    this.ctx.lineTo(leftX, leftY);
-    this.ctx.closePath();
+    this.tracePolygonPath(vertices, radius);
+    this.ctx.fill()
     this.ctx.stroke();
   }
 
@@ -1189,11 +1307,14 @@ export class Game {
       state = {strokeColor: this.editingStrokeColour, text: {fontFamily: this.editingFontFamily, fontSize: this.editingFontSize, textAlign: this.editingTextAlign}}
     } else if (this.selectedShapeIndex !== null) {
       const s = this.existingShapes[this.selectedShapeIndex];
+      const hasBg = s.type === "rect" || s.type === "circle" || s.type === "triangle" || s.type === "diamond" || s.type === "pencil";
       if (s) {
         state = {
           strokeColor: s.strokeColour ?? DEFAULT_STROKE_COLOUR,
           strokeWidth: s.type !== "text" ? (s.strokeWidth ?? DEFAULT_STROKE_WIDTH) : undefined,
           strokeStyle: s.type !== "text" ? (s.strokeStyle ?? DEFAULT_STROKE_STYLE) : undefined,
+          bgFill: hasBg ? (s.bgFill ?? DEFAULT_BG_FILL) : undefined, 
+          strokeEdge: (s.type === "rect" || s.type === "triangle" || s.type === "diamond") ? (s.strokeEdge ?? DEFAULT_STROKE_EDGE) : undefined, 
           text: s.type === "text"
             ? { fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY, fontSize: s.fontSize ?? DEFAULT_FONT_SIZE, textAlign: s.textAlign ?? DEFAULT_TEXT_ALIGN }
             : undefined,
@@ -1204,6 +1325,7 @@ export class Game {
     if(key === this.lastPanelKey) return;
     this.lastPanelKey = key;
     this.onPanelChange?.(state)
+    
   }
 
   //-------------------------FontFamily----------------------------
@@ -1350,5 +1472,102 @@ export class Game {
       }
     }
     this.clearCanvas();
+  }
+
+  //-------------for background fill-------------
+  setBgFill(fill: string) {
+    this.currentBgFill = fill;
+
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const s = this.existingShapes[i];
+      if(s.type === "rect" || s.type === "circle" || s.type === "triangle" || s.type === "diamond" || s.type === "pencil") {
+        const updated = { ...s, bgFill: fill};
+        this.existingShapes[i] = updated;
+        this.socket.send(JSON.stringify({
+          type: "shape_update",
+          shapeId: updated.id,
+          message: JSON.stringify({ shape: updated }),
+          roomId: this.roomId
+        }))
+      }
+    }
+    this.clearCanvas();
+  }
+
+  setStrokeEdge(edge: StrokeEdge) {
+    this.currentStrokeEdge = edge;
+    if(this.selectedShapeIndex !== null) {
+      const i = this.selectedShapeIndex;
+      const s = this.existingShapes[i];
+      if(s.type === "rect" || s.type === "triangle" || s.type === "diamond") {
+        const updated = { ...s, strokeEdge: edge};
+        this.existingShapes[i] = updated;
+        this.socket.send(JSON.stringify({
+          type: "shape_update",
+          shapeId: updated.id,
+          message: JSON.stringify({ shape: updated}),
+          roomId: this.roomId,
+        }))
+      }
+    }
+    this.clearCanvas()
+  }
+
+  //-----FOR Diamond Edge----------
+  // cot(half the interior angle at `corner`) — arcTo's real tangent distance from a corner
+  // along an adjacent edge is `radius * this factor`, NOT just `radius` (that only holds at
+  // exactly 90°; an acute corner needs a much longer pull-back, an obtuse one a shorter one).
+  private cornerTangentFactor(prev: {x:number;y:number}, corner: {x:number;y:number}, next: {x:number;y:number}) {
+    const v1x = prev.x - corner.x, v1y = prev.y - corner.y;
+    const v2x = next.x - corner.x, v2y = next.y - corner.y;
+    const len1 = Math.hypot(v1x, v1y);
+    const len2 = Math.hypot(v2x, v2y);
+    if (len1 === 0 || len2 === 0) return { factor: 0, len1, len2 };
+    const cosAngle = Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (len1 * len2)));
+    const tanHalf = Math.tan(Math.acos(cosAngle) / 2);
+    return { factor: tanHalf > 0 ? 1 / tanHalf : 0, len1, len2 };
+  }
+
+  private tracePolygonPath(vertices: {x:number; y: number}[], radius: number) {
+    const n = vertices.length;
+
+    if (radius > 0 && n >= 3) {
+      // clamp so no corner's rounding reaches past the midpoint of either adjacent edge —
+      // without this, an acute corner (e.g. a wide diamond's left/right points) can demand a
+      // tangent distance longer than the edge itself
+      let safeRadius = radius;
+      for (let i = 0; i < n; i++) {
+        const { factor, len1, len2 } = this.cornerTangentFactor(vertices[(i - 1 + n) % n], vertices[i], vertices[(i + 1) % n]);
+        if (factor > 0) {
+          safeRadius = Math.min(safeRadius, (Math.min(len1, len2) / 2) / factor);
+        }
+      }
+      radius = Math.max(0, safeRadius);
+    }
+
+    if(radius <= 0) {
+      this.ctx.moveTo(vertices[0].x, vertices[0].y);
+      for(let i = 1; i < vertices.length; i++){
+        this.ctx.lineTo(vertices[i].x, vertices[i].y);
+      }
+      this.ctx.closePath();
+      return;
+    }
+    const last = vertices[n - 1];
+    const first = vertices[0];
+    const edgeLen = Math.hypot(first.x - last.x, first.y - last.y);
+    const { factor: lastFactor } = this.cornerTangentFactor(vertices[(n - 2 + n) % n], last, first);
+    const startDist = Math.min(radius * lastFactor, edgeLen);
+    const startX = last.x + ((first.x - last.x) * startDist) / edgeLen;
+    const startY = last.y + ((first.y - last.y) * startDist) / edgeLen;
+    this.ctx.moveTo(startX, startY);
+    for (let i = 0; i < n; i++) {
+      const current = vertices[i];
+      const next = vertices[(i + 1) % n];
+      this.ctx.arcTo(current.x, current.y, next.x, next.y, radius);
+    }
+    this.ctx.lineTo(startX, startY);
+    this.ctx.closePath();
   }
 }

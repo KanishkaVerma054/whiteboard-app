@@ -1,3 +1,4 @@
+import { LINE_THRESHOLD } from "@/types/types";
 import type { Shape } from "./Game";
 
 export type BoundingBox = {
@@ -265,5 +266,12 @@ export class SelectionLogic {
       x: cx + dx * cos - dy * sin,
       y: cy + dx * sin + dy * cos,
     };
+  }
+
+  //-----is path closed for bg fill---------
+  static isPencilPathClosed(points: {x: number, y: number}[]): boolean {
+    if(points.length < 3) return false;
+    const [first, last] = [points[0], points[points.length - 1]];
+    return Math.hypot(last.x - first.x, last.y - first.y) <= LINE_THRESHOLD
   }
 }

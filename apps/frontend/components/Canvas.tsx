@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
 import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Diamond, Hand, Minus, MousePointer2, MoveRight, PanelBottom, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
 import { Game } from "@/app/draw/Game";
-import { FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, PanelState, STROKE_COLOURS, STROKE_WIDTHS, StrokeStyle, StrokeWidth, TextAlign } from "@/types/types";
+import { BG_FILLS, DEFAULT_BG_FILL, FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, PanelState, STROKE_COLOURS, STROKE_WIDTHS, StrokeEdge, StrokeStyle, StrokeWidth, TextAlign } from "@/types/types";
 // import { useWindowSize } from "@/hooks/useWindowSize";
 
 //TODO: use enumns for circle rect pencil etc
@@ -99,6 +99,8 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
         onStrokeColorChange={(c) => game?.setStrokeColour(c)}
         onStrokeWidthChange={(w) => game?.setStrokeWidth(w)}
         onStrokeStyleChange={(s) => game?.setStrokeStyle(s)}
+        onBgFillChange={(c) => game?.setBgFill(c)}
+        onStrokeEdgeChange={(e) => game?.setStrokeEdge(e)}
       />
     </div>
   );
@@ -113,7 +115,9 @@ function Topbar({
   onTextAlignChange,
   onStrokeColorChange,
   onStrokeWidthChange,
-  onStrokeStyleChange
+  onStrokeStyleChange,
+  onBgFillChange,
+  onStrokeEdgeChange
 }: {
   selectedTool: Tool;
   setSelectedTool: (s: Tool) => void;
@@ -124,6 +128,8 @@ function Topbar({
   onStrokeColorChange: (c: string) => void;
   onStrokeWidthChange: (w: number) => void;
   onStrokeStyleChange: (s: StrokeStyle) => void;
+  onBgFillChange: (c: string) => void;
+  onStrokeEdgeChange: (e: StrokeEdge) => void;
 }) {
   // a plain local const narrows correctly inside the .map() closures below;
   // `panel.text && (...)` does not, since TS can't track a property access through a closure
@@ -195,8 +201,7 @@ function Topbar({
             setSelectedTool("grab");
           }}
         ></IconButton>
-        <IconButton
-          
+        <IconButton   
           activated={selectedTool === "text"}
           icon={<Type />}
           onClick={() => {
@@ -262,6 +267,51 @@ function Topbar({
                     }`}
                   >
                     <div className="w-4" style={{ borderTopWidth: 2, borderTopStyle: s, borderColor: "currentColor" }} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {panel.bgFill !== undefined && (
+            <>
+              <span className="text-xs text-gray-400">Background</span>
+              <div className="flex gap-1.5">
+                {BG_FILLS.map((c) => (
+                  <button
+                    key={c}
+                    title={c === DEFAULT_BG_FILL ? "Transparent" : c}
+                    onClick={() => onBgFillChange(c)}
+                    style={
+                      c === DEFAULT_BG_FILL
+                        ? { backgroundImage: "repeating-conic-gradient(#555 0% 25%, #333 0% 50%)", backgroundSize: "8px 8px" }
+                        : { backgroundColor: c }
+                    }
+                    className={`h-6 w-6 rounded-md border-2 transition-all ${
+                      panel.bgFill === c ? "border-blue-400 scale-110" : "border-neutral-700"
+                    }`}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {panel.strokeEdge !== undefined && (
+            <>
+              <span className="text-xs text-gray-400">Edges</span>
+              <div className="flex gap-1.5">
+                {(["sharp", "round"] as StrokeEdge[]).map((e) => (
+                  <button
+                    key={e}
+                    title={e}
+                    onClick={() => onStrokeEdgeChange(e)}
+                    className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+                      panel.strokeEdge === e
+                        ? "border-blue-400 bg-blue-500/20 text-blue-300"
+                        : "border-transparent bg-neutral-700 text-gray-200 hover:bg-neutral-600"
+                    }`}
+                  >
+                    <div className="h-4 w-4 border-2 border-current" style={{ borderRadius: e === "round" ? 4 : 0 }} />
                   </button>
                 ))}
               </div>

@@ -33,10 +33,21 @@ export const DEFAULT_STROKE_WIDTH = STROKE_WIDTHS.thin
 export type StrokeStyle = "solid" | "dashed" | "dotted";
 export const DEFAULT_STROKE_STYLE: StrokeStyle = "solid"
 
+//---------------------Shapes Background Colour----------------------
+export const BG_FILLS = ["#00000000", "#ffc9c9", "#b2f2bb", "#a5d8ff", "#ffec99"]
+export const DEFAULT_BG_FILL = BG_FILLS[0];
+
+//--------edges----------
+export type StrokeEdge = "sharp" | "round";
+export const DEFAULT_STROKE_EDGE: StrokeEdge = "sharp";
+
 export type PanelState = {
     strokeColor: string;
     strokeWidth?: number;
     strokeStyle?: StrokeStyle;
+    bgFill?: string;
+    strokeEdge?: StrokeEdge;
     text?: { fontFamily: FontFamily; fontSize: number; textAlign: TextAlign };
 };
 
+export const LINE_THRESHOLD = 8;
