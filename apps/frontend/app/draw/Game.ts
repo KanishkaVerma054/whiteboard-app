@@ -1,7 +1,8 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, DEFAULT_BG_FILL, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_EDGE, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeEdge, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, DEFAULT_BG_FILL, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_EDGE, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, ERASER_DIM_OPACITY, ERASER_TOLERANCE, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeEdge, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
+import { EraserLogic } from "./EraserLogic";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
 // const HIT_TEST_PADDING = 6; // px, generous click target for thin shapes like line/arrow
@@ -164,6 +165,7 @@ export class Game {
   private currentStrokeStyle: StrokeStyle = DEFAULT_STROKE_STYLE;
   private currentBgFill: string = DEFAULT_BG_FILL;
   private currentStrokeEdge: StrokeEdge = DEFAULT_STROKE_EDGE;
+  private eraserMarkedIds: Set<string> = new Set();
 
   socket: WebSocket;
 
@@ -180,6 +182,7 @@ export class Game {
     this.initHandlers();
     this.initMouseHandlers();
     window.addEventListener("keydown", this.keyDownHandler);
+    window.addEventListener("mouseup", this.finishErasing)
   }
 
   destroy() {
@@ -190,8 +193,8 @@ export class Game {
     this.canvas.removeEventListener("mousemove", this.mouseMoveHandler);
     this.canvas.removeEventListener("wheel", this.mouseWheelHandler);
     this.canvas.removeEventListener("dblclick", this.dblClickHandler);
-    
     window.removeEventListener("keydown", this.keyDownHandler);
+    window.removeEventListener("mouseup", this.finishErasing);
   }
 
   // Delete/Backspace removes the selected shape (and broadcasts the delete); Escape clears the selection.
@@ -219,7 +222,7 @@ export class Game {
   };
 
   setTool(
-    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text"
+    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text" | "eraser"
   ) {
     if (tool !== "select") {
       this.selectedShapeIndex = null;
@@ -227,6 +230,7 @@ export class Game {
       this.resizeAnchor = null;
       this.isDraggingShape = false;
     }
+    this.eraserMarkedIds.clear();
     this.selectedTool = tool;
     this.clearCanvas();
   }
@@ -367,6 +371,7 @@ export class Game {
 
       this.ctx.save();
       try {
+        this.ctx.globalAlpha = this.eraserMarkedIds.has(shape.id) ? ERASER_DIM_OPACITY : 1;
       this.ctx.translate(cx, cy);
       this.ctx.rotate(shape.rotation);
       this.ctx.translate(-cx, -cy);
@@ -535,6 +540,11 @@ export class Game {
       this.selectedShapeIndex = hitIndex;
       this.isDraggingShape = hitIndex !== null;
       this.clearCanvas();
+      return;
+    }
+
+    if (this.selectedTool === "eraser") {
+      if (e.button === 0) this.markAlongPath(x, y);
       return;
     }
 
@@ -739,7 +749,9 @@ export class Game {
           : this.transformScreenToWorld(e.clientX, e.clientY);
       const width = curX - this.startX;
       const height = curY - this.startY;
-      this.clearCanvas();
+      // the eraser draws no preview, and markAlongPath redraws when a shape gets marked — redrawing
+      // every room's shapes on every move here can block the eraser trail's animation frames
+      if (selectedTool !== "eraser") this.clearCanvas();
 
       this.ctx.strokeStyle = this.currentStrokeColour;
       this.ctx.lineWidth = this.currentStrokeWidth;
@@ -900,6 +912,15 @@ export class Game {
           this.startY = curY;
         }
         this.clearCanvas()
+      } else if (selectedTool === "eraser") {
+        // mouseup is only heard on the canvas, so a release over the toolbar never reaches
+        // mouseUpHandler — without this check the eraser keeps deleting with no button held
+        if ((e.buttons & 1) === 0) {
+          this.finishErasing();
+          return;
+        }
+        this.markAlongPath(curX, curY);
+
       } else if (this.clicked && selectedTool === "grab") {
         
         const {x: trasformedX, y: transformedY} = this.transformScreenToWorld(e.clientX, e.clientY)
@@ -1121,6 +1142,57 @@ export class Game {
 
     this.ctx.restore();
   }
+
+  //-------------------------------Eraser------------------------------
+
+  // mousemove only fires every so often, so a fast drag can jump clean over a thin shape.
+  // Walk the straight line from the last position to this one, checking along the way.
+  private markAlongPath(toX: number, toY: number) {
+    const tolerance = ERASER_TOLERANCE / this.scale;
+    const fromX = this.startX;
+    const fromY = this.startY;
+    const distance = Math.hypot(toX - fromX, toY - fromY);
+    const steps = Math.max(1, Math.ceil(distance / tolerance));
+    let markedAny = false;
+
+    for (let i = 1; i <= steps; i++) {
+      const x = fromX + ((toX - fromX) * i) / steps;
+      const y = fromY + ((toY - fromY) * i) / steps;
+      // backward = topmost first; skipping marked shapes lets a drag reach whatever is underneath
+      for (let j = this.existingShapes.length - 1; j >= 0; j--) {
+        const shape = this.existingShapes[j];
+        if (this.eraserMarkedIds.has(shape.id)) continue;
+        if (EraserLogic.isPointOnShape(shape, x, y, tolerance)) {
+          this.eraserMarkedIds.add(shape.id);
+          markedAny = true;
+          break;
+        }
+      }
+    }
+
+    this.startX = toX;
+    this.startY = toY;
+    if (markedAny) this.clearCanvas();
+  }
+  // Runs on window, not the canvas, so releasing over the toolbar still finishes the erase.
+  finishErasing = () => {
+    if (this.selectedTool !== "eraser") return;
+    this.clicked = false;
+    if (this.eraserMarkedIds.size === 0) return;
+
+    this.existingShapes = this.existingShapes.filter((shape) => !this.eraserMarkedIds.has(shape.id));
+    this.eraserMarkedIds.forEach((shapeId) => {
+      this.socket.send(
+        JSON.stringify({
+          type: "shape_delete",
+          shapeId,
+          roomId: this.roomId,
+        })
+      );
+    });
+    this.eraserMarkedIds.clear();
+    this.clearCanvas();
+  };
 
   //-------------------------------TextBox------------------------------
 

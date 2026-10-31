@@ -1,14 +1,16 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Diamond, Hand, Minus, MousePointer2, MoveRight, PanelBottom, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Diamond, Eraser, Hand, Minus, MousePointer2, MoveRight, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
 import { Game } from "@/app/draw/Game";
 import { BG_FILLS, DEFAULT_BG_FILL, FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, PanelState, STROKE_COLOURS, STROKE_WIDTHS, StrokeEdge, StrokeStyle, StrokeWidth, TextAlign } from "@/types/types";
-// import { useWindowSize } from "@/hooks/useWindowSize";
+import { EraserTrail } from "./EraserTrail";
 
 //TODO: use enumns for circle rect pencil etc
 
 
-export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text";
+export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text" | "eraser";
+
+const ERASER_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Ccircle cx='7' cy='7' r='5' fill='black' stroke='white'/%3E%3C/svg%3E") 8 8, auto`;
 
 // icon per font family, shown instead of the text label in the font-family row —
 // Pencil doubles as both the pencil *tool* icon and the "hand-drawn" *font* icon
@@ -88,7 +90,9 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
             ? "cursor-default"
             : "cursor-crosshair"
         }
+        style={selectedTool === "eraser" ? { cursor: ERASER_CURSOR } : undefined}
       ></canvas>
+      <EraserTrail isActive={selectedTool === "eraser"}/>
       <Topbar
         setSelectedTool={setSelectedTool}
         selectedTool={selectedTool}
@@ -206,6 +210,13 @@ function Topbar({
           icon={<Type />}
           onClick={() => {
             setSelectedTool("text");
+          }}
+        ></IconButton>
+        <IconButton   
+          activated={selectedTool === "eraser"}
+          icon={<Eraser />}
+          onClick={() => {
+            setSelectedTool("eraser");
           }}
         ></IconButton>
       </div>

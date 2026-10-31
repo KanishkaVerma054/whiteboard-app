@@ -5,6 +5,8 @@ export const HIT_TEST_PADDING = 6; // px, generous click target for thin shapes 
 export const ROTATE_HANDLE_OFFSET = 24; // px above the box's top edge, constant on screen regardless of zoom
 export const SELECTION_COLOR = "#3182ed" // or "#6965db"; 
 export const SELECTION_PADDING = 4; // px gap between a shape and its selection outline, constant on screen regardless of zoom
+export const ERASER_TOLERANCE = 6;
+export const ERASER_DIM_OPACITY = 0.3
 
 export type FontFamily = "hand-drawn" | "sans" | "code";
 export const FONT_FAMILIES: Record<FontFamily, {label: string; css: string}> = {
@@ -28,7 +30,6 @@ export const DEFAULT_STROKE_COLOUR = STROKE_COLOURS[0];
 export type StrokeWidth = "thin" | "medium" | "bold";
 export const STROKE_WIDTHS: Record<StrokeWidth, number> = { thin: 1, medium: 2, bold: 4}
 export const DEFAULT_STROKE_WIDTH = STROKE_WIDTHS.thin
-
 //----------------------Stroke styles--------------------------------
 export type StrokeStyle = "solid" | "dashed" | "dotted";
 export const DEFAULT_STROKE_STYLE: StrokeStyle = "solid"
