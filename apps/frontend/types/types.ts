@@ -52,3 +52,8 @@ export type PanelState = {
 };
 
 export const LINE_THRESHOLD = 8;
+
+// zoom limits and button step (same values Excalidraw uses: 10%–3000%, ±10% per click)
+export const MIN_ZOOM = 0.1;
+export const MAX_ZOOM = 30;
+export const ZOOM_STEP = 0.1;

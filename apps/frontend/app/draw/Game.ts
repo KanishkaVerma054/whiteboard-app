@@ -1,6 +1,6 @@
 import { Tool } from "@/components/Canvas";
 import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, DEFAULT_BG_FILL, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_EDGE, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, ERASER_DIM_OPACITY, ERASER_TOLERANCE, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeEdge, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { CANVAS_STORAGE_KEY, DEFAULT_BG_FILL, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_EDGE, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, ERASER_DIM_OPACITY, ERASER_TOLERANCE, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, MAX_ZOOM, MIN_ZOOM, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeEdge, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 import { EraserLogic } from "./EraserLogic";
 
@@ -946,7 +946,7 @@ export class Game {
     if (e.ctrlKey || e.metaKey) {
       // zoom
       const scaleAmount = -e.deltaY/200 // for scrollling "up" // -ve deltaY means zoom in
-      const newScale = this.scale * (1 + scaleAmount)
+      const newScale = Game.clampScale(this.scale * (1 + scaleAmount))
 
       const mouseX = e.clientX - this.canvas.offsetLeft
       const mouseY = e.clientY - this.canvas.offsetTop
@@ -1047,14 +1047,24 @@ export class Game {
     return {x, y};
   };
 
-  setScale(newScale: number) {
-    const rect = this.canvas.getBoundingClientRect();
-    
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
+  // keeps zoom inside MIN_ZOOM..MAX_ZOOM — without a limit, drawing while zoomed far out
+  // creates shapes with enormous world coordinates (see room 15 in logic.md)
+  static clampScale(scale: number) {
+    return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+  }
 
-    this.panX -= centerX * (newScale - this.scale);
-    this.panY -= centerY * (newScale - this.scale);
+  // zoom around the centre of the screen (used by the zoom buttons)
+  setScale(scale: number) {
+    const newScale = Game.clampScale(scale);
+    const rect = this.canvas.getBoundingClientRect();
+
+    // convert the screen centre to world coordinates first, same as mouseWheelHandler does
+    // for the cursor — this keeps the point under the screen centre fixed while zooming
+    const worldCenterX = (rect.width / 2 - this.panX) / this.scale;
+    const worldCenterY = (rect.height / 2 - this.panY) / this.scale;
+
+    this.panX -= worldCenterX * (newScale - this.scale);
+    this.panY -= worldCenterY * (newScale - this.scale);
 
     this.scale = newScale
     this.onScaleChange(this.scale)

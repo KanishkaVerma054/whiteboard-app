@@ -1,8 +1,8 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { IconButton } from "./IconButtton";
-import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Diamond, Eraser, Hand, Minus, MousePointer2, MoveRight, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Diamond, Eraser, Hand, Minus, Plus, MousePointer2, MoveRight, Pencil, RectangleHorizontalIcon, Triangle, Type } from "lucide-react";
 import { Game } from "@/app/draw/Game";
-import { BG_FILLS, DEFAULT_BG_FILL, FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, PanelState, STROKE_COLOURS, STROKE_WIDTHS, StrokeEdge, StrokeStyle, StrokeWidth, TextAlign } from "@/types/types";
+import { BG_FILLS, DEFAULT_BG_FILL, FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, MAX_ZOOM, MIN_ZOOM, PanelState, STROKE_COLOURS, STROKE_WIDTHS, StrokeEdge, StrokeStyle, StrokeWidth, TextAlign, ZOOM_STEP } from "@/types/types";
 import { EraserTrail } from "./EraserTrail";
 
 //TODO: use enumns for circle rect pencil etc
@@ -106,9 +106,51 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
         onBgFillChange={(c) => game?.setBgFill(c)}
         onStrokeEdgeChange={(e) => game?.setStrokeEdge(e)}
       />
+      <ZoomControls
+        scale={scale}
+        onZoomIn={() => game?.setScale(scale + ZOOM_STEP)}
+        onZoomOut={() => game?.setScale(scale - ZOOM_STEP)}
+        onReset={() => game?.setScale(1)}
+      />
     </div>
   );
 };
+
+// bottom-left "−  100%  +" pill; clicking the percentage resets zoom to 100%
+function ZoomControls({
+  scale,
+  onZoomIn,
+  onZoomOut,
+  onReset,
+}: {
+  scale: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onReset: () => void;
+}) {
+  const btn =
+    "flex h-9 w-10 items-center justify-center text-gray-200 transition-colors hover:bg-neutral-700 disabled:opacity-40 disabled:hover:bg-transparent";
+  return (
+    <div
+      className="fixed bottom-4 left-4 flex items-center overflow-hidden rounded-lg bg-neutral-800 select-none"
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <button title="Zoom out" className={btn} onClick={onZoomOut} disabled={scale <= MIN_ZOOM}>
+        <Minus className="h-4 w-4" />
+      </button>
+      <button
+        title="Reset zoom"
+        className="h-9 min-w-14 px-2 text-sm text-gray-200 tabular-nums transition-colors hover:bg-neutral-700"
+        onClick={onReset}
+      >
+        {Math.round(scale * 100)}%
+      </button>
+      <button title="Zoom in" className={btn} onClick={onZoomIn} disabled={scale >= MAX_ZOOM}>
+        <Plus className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
 
 function Topbar({
   selectedTool,
@@ -135,8 +177,6 @@ function Topbar({
   onBgFillChange: (c: string) => void;
   onStrokeEdgeChange: (e: StrokeEdge) => void;
 }) {
-  // a plain local const narrows correctly inside the .map() closures below;
-  // `panel.text && (...)` does not, since TS can't track a property access through a closure
   const text = panel?.text;
   return (
     <div className="fixed top-[10px] left-[10px]">
