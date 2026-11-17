@@ -268,7 +268,7 @@ export class SelectionLogic {
     };
   }
 
-  //-----is path closed for bg fill----------
+  //--------is path closed for bg fill----------
   static isPencilPathClosed(points: {x: number, y: number}[]): boolean {
     if(points.length < 3) return false;
     const [first, last] = [points[0], points[points.length - 1]];

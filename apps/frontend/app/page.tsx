@@ -1,6 +1,7 @@
 import { Button } from "@repo/ui/button";
 import { Card } from "@repo/ui/card";
-import { Pencil, Share2, Users2, Sparkles, Github, Download } from "lucide-react";
+import { Pencil, Share2, Users2, Sparkles, Download } from "lucide-react";
+import { GithubIcon } from "@/components/GithubIcon";
 import Link from "next/link";
 
 function App() {
@@ -112,7 +113,7 @@ function App() {
             </p>
             <div className="flex space-x-6">
               <a href="https://github.com" className="text-muted-foreground hover:text-primary">
-                <Github className="h-5 w-5" />
+                <GithubIcon className="h-5 w-5" />
               </a>
               <a href="#" className="text-muted-foreground hover:text-primary">
                 <Download className="h-5 w-5" />
