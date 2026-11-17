@@ -13,6 +13,8 @@ import { config as baseConfig } from "./base.js";
  * @type {import("eslint").Linter.Config}
  * */
 export const nextJsConfig = [
+  // `next lint` skipped build output on its own; plain `eslint .` needs it spelled out.
+  { ignores: [".next/**", "out/**", "next-env.d.ts"] },
   ...baseConfig,
   js.configs.recommended,
   eslintConfigPrettier,

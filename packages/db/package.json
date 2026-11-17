@@ -2,21 +2,25 @@
   "name": "@repo/db",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "index.js",
   "exports": {
     "./client": "./src/db.ts"
   },
   "scripts": {
+    "generate": "prisma generate",
+    "postinstall": "prisma generate",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",
-    "prisma": "^6.12.0"
+    "prisma": "7.10.1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@prisma/client": "6.19.3"
+    "@prisma/client": "7.10.1",
+    "@prisma/adapter-pg": "7.10.1"
   }
 }

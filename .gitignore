@@ -36,3 +36,6 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+
+# Claude Code project notes (local only)
+CLAUDE.md
