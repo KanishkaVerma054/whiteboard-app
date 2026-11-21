@@ -27,12 +27,13 @@ const TEXT_ALIGN_ICONS: Record<TextAlign, ReactNode> = {
   right: <AlignRight className="w-4 h-4" />,
 };
 
-const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
+const Canvas = ({ roomId, token }: { roomId: string; token: string }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [game, setGame] = useState<Game>();
   const [selectedTool, setSelectedTool] = useState<Tool>("select");
   // const { width, height } = useWindowSize();
   const [scale,  setScale] = useState(1);
+  const [iConnected, setIsConnected] = useState(false);
   const[panel, setPanel] = useState<PanelState | null>(null);
 
 
@@ -42,38 +43,19 @@ const Canvas = ({ roomId, socket }: { roomId: string; socket: WebSocket }) => {
 
   useEffect(() => {
     if (canvasRef.current) {
-      const g = new Game(canvasRef.current, roomId, socket, setScale,  setPanel );
+      const g = new Game(canvasRef.current, roomId, token, setScale,  setPanel, setIsConnected );
       setGame(g);
 
       return () => {
         g.destroy();
       };
     }
-  }, [canvasRef, roomId, socket]);
+  }, [canvasRef, roomId, token]);
 
   // To update tool when changed
   useEffect(() => {
     game?.setTool(selectedTool);
   }, [selectedTool, game]);
-
-
-  // update canvas and redraw on resize
-  // useEffect(() => {
-  //   if (canvasRef.current && game) {
-  //     canvasRef.current.width = width;
-  //     canvasRef.current.height = height;
-  //     game.clearCanvas();
-  //   }
-  // }, [width, height, game]);
-//   useEffect(() => {
-//     if (canvasRef.current) {
-//       const g = new Game(canvasRef.current, roomId, socket, setScale);
-//       setGame(g);
-//       return () => {
-//         g.destroy();
-//       }
-//     }
-// }, [canvasRef]);
   
   return (
     <div className="overflow-hidden h-[100vh] relative">

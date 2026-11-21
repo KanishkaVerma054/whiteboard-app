@@ -1,8 +1,38 @@
 import { Tool } from "@/components/Canvas";
-import { getExistingShapes } from "./http";
-import { CANVAS_STORAGE_KEY, DEFAULT_BG_FILL, DEFAULT_FONT_FAMILY, DEFAULT_FONT_SIZE, DEFAULT_STROKE_COLOUR, DEFAULT_STROKE_EDGE, DEFAULT_STROKE_STYLE, DEFAULT_STROKE_WIDTH, DEFAULT_TEXT_ALIGN, ERASER_DIM_OPACITY, ERASER_TOLERANCE, FONT_FAMILIES, FontFamily, HANDLE_SCREEN_SIZE, HIT_TEST_PADDING, LINE_HEIGHT, MAX_ZOOM, MIN_ZOOM, PanelState, ROTATE_HANDLE_OFFSET, SELECTION_COLOR, SELECTION_PADDING, StrokeEdge, StrokeStyle, TextAlign, VIEWPORT_SECRET_KEY } from "@/types/types";
+import { toShape } from "./http";
+import {
+  CANVAS_STORAGE_KEY,
+  DEFAULT_BG_FILL,
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_FONT_SIZE,
+  DEFAULT_STROKE_COLOUR,
+  DEFAULT_STROKE_EDGE,
+  DEFAULT_STROKE_STYLE,
+  DEFAULT_STROKE_WIDTH,
+  DEFAULT_TEXT_ALIGN,
+  ERASER_DIM_OPACITY,
+  ERASER_TOLERANCE,
+  FONT_FAMILIES,
+  FontFamily,
+  HANDLE_SCREEN_SIZE,
+  HIT_TEST_PADDING,
+  LINE_HEIGHT,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  OutgoingMessage,
+  PanelState,
+  ROTATE_HANDLE_OFFSET,
+  SELECTION_COLOR,
+  SELECTION_PADDING,
+  StoredShapeRow,
+  StrokeEdge,
+  StrokeStyle,
+  TextAlign,
+  VIEWPORT_SECRET_KEY,
+} from "@/types/types";
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 import { EraserLogic } from "./EraserLogic";
+import { WS_URL } from "@/config";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
 // const HIT_TEST_PADDING = 6; // px, generous click target for thin shapes like line/arrow
@@ -10,7 +40,7 @@ import { EraserLogic } from "./EraserLogic";
 // `id` mirrors the owning Chat row's `shapeId` — how the backend finds this shape again to
 // persist a move/resize/delete. Every shape, old or new, is guaranteed to have one (see
 // getExistingShapes in http.ts and the backfill of legacy rows).
-export type Shape = { id: string, rotation: number, strokeColour: string } & (
+export type Shape = { id: string; rotation: number; strokeColour: string } & (
   | {
       type: "rect";
       x: number;
@@ -31,7 +61,7 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       strokeWidth: number;
       strokeStyle: StrokeStyle;
       bgFill: string;
-      strokeEdge: StrokeEdge; 
+      strokeEdge: StrokeEdge;
     }
   | {
       type: "pencil";
@@ -60,7 +90,7 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       strokeWidth: number;
       strokeStyle: StrokeStyle;
       bgFill: string;
-      strokeEdge: StrokeEdge; 
+      strokeEdge: StrokeEdge;
     }
   | {
       type: "diamond";
@@ -71,7 +101,7 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       strokeWidth: number;
       strokeStyle: StrokeStyle;
       bgFill: string;
-      strokeEdge: StrokeEdge; 
+      strokeEdge: StrokeEdge;
     }
   | {
       type: "arrow";
@@ -88,8 +118,8 @@ export type Shape = { id: string, rotation: number, strokeColour: string } & (
       y: number;
       text: string;
       fontSize: number;
-      fontFamily: FontFamily,
-      textAlign: TextAlign
+      fontFamily: FontFamily;
+      textAlign: TextAlign;
       width: number;
       height: number;
     }
@@ -103,10 +133,10 @@ const KNOWN_SHAPE_TYPES = new Set<Shape["type"]>([
   "triangle",
   "diamond",
   "arrow",
-  "text"
+  "text",
 ]);
 
-export type TextShape = Extract<Shape, {type: "text"}>
+export type TextShape = Extract<Shape, { type: "text" }>;
 
 // Guards against legacy/malformed rows from the backend (e.g. an old, since-removed tool's
 // leftover data) or a garbage message from another client — anything not a currently-known shape.
@@ -131,7 +161,7 @@ export class Game {
   private scale: number = 1;
   private onScaleChangeCallback: (scale: number) => void;
   // private outputScale: number = 1
-  private saveViewportTimeout: ReturnType<typeof setTimeout> | null = null // // Holds the pending debounce timer's id, so a new pan/zoom event can cancel the previous scheduled save
+  private saveViewportTimeout: ReturnType<typeof setTimeout> | null = null; // // Holds the pending debounce timer's id, so a new pan/zoom event can cancel the previous scheduled save
   private isStandalone: boolean = false;
   // set once destroy() runs — guards against a torn-down instance (e.g. React Strict Mode's
   // dev-only double-mount) still painting the shared canvas after an in-flight fetch resolves
@@ -141,7 +171,12 @@ export class Game {
   private isDraggingShape: boolean = false;
   private activeHandle: HandleName | null = null;
   private resizeAnchor: { x: number; y: number } | null = null;
-  private resizeStartBox: { x: number; y: number; width: number; height: number } | null = null;
+  private resizeStartBox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null = null;
   private resizeRotation: number = 0;
   private currentPencilStroke: { x: number; y: number }[] = [];
   private isRotating: boolean = false;
@@ -167,26 +202,56 @@ export class Game {
   private currentStrokeEdge: StrokeEdge = DEFAULT_STROKE_EDGE;
   private eraserMarkedIds: Set<string> = new Set();
 
-  socket: WebSocket;
+  private socket: WebSocket | null = null;
+  private token: string;
+  private isConnected = false;
+  private onConnectionChange?: (isConnected: boolean) => void;
 
-  constructor(canvas: HTMLCanvasElement, roomId: string, socket: WebSocket, onScaleChangeCallback: (scale: number) => void, onPanelChange?: (state: PanelState | null) => void) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    roomId: string,
+    token: string,
+    onScaleChangeCallback: (scale: number) => void,
+    onPanelChange?: (state: PanelState | null) => void,
+    onConnectionChange?: (isConnected: boolean) => void
+  ) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.existingShapes = [];
     this.roomId = roomId;
-    this.socket = socket;
+    // this.socket = socket;
+    this.token = token;
     this.clicked = false;
     this.onScaleChangeCallback = onScaleChangeCallback;
     this.onPanelChange = onPanelChange;
+    this.onConnectionChange = onConnectionChange;
     this.init();
-    this.initHandlers();
+    // this.initHandlers();
     this.initMouseHandlers();
     window.addEventListener("keydown", this.keyDownHandler);
-    window.addEventListener("mouseup", this.finishErasing)
+    window.addEventListener("mouseup", this.finishErasing);
+    this.connectWebSocket();
   }
 
   destroy() {
     this.destroyed = true;
+
+    const ws = this.socket;
+    if (ws) {
+      // detach first so a torn-down Game never logs errors or touches state from its old socket
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      if (ws.readyState === WebSocket.CONNECTING) {
+        // closing mid-handshake makes the browser fire "error" (React StrictMode's dev double-mount
+        // hits this on every page load) — wait for the handshake to finish, then close cleanly
+        ws.addEventListener("open", () => ws.close());
+      } else {
+        ws.close();
+      }
+    }
+    this.socket = null;
 
     this.canvas.removeEventListener("mousedown", this.mouseDownHandler);
     this.canvas.removeEventListener("mouseup", this.mouseUpHandler);
@@ -199,8 +264,9 @@ export class Game {
 
   // Delete/Backspace removes the selected shape (and broadcasts the delete); Escape clears the selection.
   keyDownHandler = (e: KeyboardEvent) => {
-    if(this.enableTextArea) return;
-    if (this.selectedTool !== "select" || this.selectedShapeIndex === null) return;
+    if (this.enableTextArea) return;
+    if (this.selectedTool !== "select" || this.selectedShapeIndex === null)
+      return;
 
     if (e.key === "Delete" || e.key === "Backspace") {
       const shape = this.existingShapes[this.selectedShapeIndex];
@@ -208,13 +274,11 @@ export class Game {
       this.selectedShapeIndex = null;
       this.clearCanvas();
 
-      this.socket.send(
-        JSON.stringify({
-          type: "shape_delete",
-          shapeId: shape.id,
-          roomId: this.roomId,
-        })
-      );
+      this.send({
+        type: "shape_delete",
+        shapeId: shape.id,
+        roomId: this.roomId,
+      });
     } else if (e.key === "Escape") {
       this.selectedShapeIndex = null;
       this.clearCanvas();
@@ -222,7 +286,18 @@ export class Game {
   };
 
   setTool(
-    tool: "circle" | "pencil" | "rect" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text" | "eraser"
+    tool:
+      | "circle"
+      | "pencil"
+      | "rect"
+      | "line"
+      | "triangle"
+      | "diamond"
+      | "arrow"
+      | "grab"
+      | "select"
+      | "text"
+      | "eraser"
   ) {
     if (tool !== "select") {
       this.selectedShapeIndex = null;
@@ -236,81 +311,86 @@ export class Game {
   }
 
   async init() {
-    this.existingShapes = await getExistingShapes(this.roomId);
-
     if (this.isStandalone) {
       try {
-        const storedShapes = localStorage.getItem(CANVAS_STORAGE_KEY)
+        const storedShapes = localStorage.getItem(CANVAS_STORAGE_KEY);
         if (storedShapes) {
           const parsedData = JSON.parse(storedShapes);
-          this.existingShapes = [...this.existingShapes, ...parsedData]
+          this.existingShapes = [...this.existingShapes, ...parsedData];
         }
-      } catch(e) {
-        console.error("Error loading shapes from localStorage: ", e)
+      } catch (e) {
+        console.error("Error loading shapes from localStorage: ", e);
       }
     }
 
     this.existingShapes = this.existingShapes.filter(isKnownShape);
 
     try {
-      const storedViewport = localStorage.getItem(this.viewportStorageKey())
+      const storedViewport = localStorage.getItem(this.viewportStorageKey());
       if (storedViewport) {
-        const { panX, panY, scale } = JSON.parse(storedViewport)
+        const { panX, panY, scale } = JSON.parse(storedViewport);
         this.panX = panX;
         this.panY = panY;
         this.scale = scale;
-        this.onScaleChange(this.scale)
+        this.onScaleChange(this.scale);
       }
     } catch (e) {
       console.error("Error loading viewport from localStorage:", e);
     }
 
     Object.values(FONT_FAMILIES).forEach((f) => {
-      document.fonts.load(`20px ${f.css}`).then(() => this.clearCanvas())
-    })
+      document.fonts.load(`20px ${f.css}`).then(() => this.clearCanvas());
+    });
 
     this.clearCanvas();
   }
 
-  initHandlers() {
-    this.socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
+  // initHandlers() {
+  //   this.socket.onmessage = (event) => {
+  //     const message = JSON.parse(event.data);
 
-      if (message.type == "chat") {
-        const parsedShape = JSON.parse(message.message);
-        // the server echoes our own new shapes back to us too, and we already pushed
-        // them locally when creating — skip anything we already have by id
-        if (
-          isKnownShape(parsedShape.shape) &&
-          !this.existingShapes.some((s) => s.id === parsedShape.shape.id)
-        ) {
-          this.existingShapes.push(parsedShape.shape);
-          this.clearCanvas();
-        }
-      } else if (message.type === "shape_update") {
-        const parsed = JSON.parse(message.message);
-        if (isKnownShape(parsed.shape)) {
-          const index = this.existingShapes.findIndex((s) => s.id === message.shapeId);
-          if (index !== -1) {
-            this.existingShapes[index] = parsed.shape;
-            this.clearCanvas();
-          }
-        }
-      } else if (message.type === "shape_delete") {
-        const index = this.existingShapes.findIndex((s) => s.id === message.shapeId);
-        if (index !== -1) {
-          this.existingShapes.splice(index, 1);
-          if (this.selectedShapeIndex === index) {
-            this.selectedShapeIndex = null;
-          } else if (this.selectedShapeIndex !== null && this.selectedShapeIndex > index) {
-            // keep pointing at the same shape after the splice shifts everything after it down by one
-            this.selectedShapeIndex -= 1;
-          }
-          this.clearCanvas();
-        }
-      }
-    };
-  }
+  //     if (message.type == "chat") {
+  //       const parsedShape = JSON.parse(message.message);
+  //       // the server echoes our own new shapes back to us too, and we already pushed
+  //       // them locally when creating — skip anything we already have by id
+  //       if (
+  //         isKnownShape(parsedShape.shape) &&
+  //         !this.existingShapes.some((s) => s.id === parsedShape.shape.id)
+  //       ) {
+  //         this.existingShapes.push(parsedShape.shape);
+  //         this.clearCanvas();
+  //       }
+  //     } else if (message.type === "shape_update") {
+  //       const parsed = JSON.parse(message.message);
+  //       if (isKnownShape(parsed.shape)) {
+  //         const index = this.existingShapes.findIndex(
+  //           (s) => s.id === message.shapeId
+  //         );
+  //         if (index !== -1) {
+  //           this.existingShapes[index] = parsed.shape;
+  //           this.clearCanvas();
+  //         }
+  //       }
+  //     } else if (message.type === "shape_delete") {
+  //       const index = this.existingShapes.findIndex(
+  //         (s) => s.id === message.shapeId
+  //       );
+  //       if (index !== -1) {
+  //         this.existingShapes.splice(index, 1);
+  //         if (this.selectedShapeIndex === index) {
+  //           this.selectedShapeIndex = null;
+  //         } else if (
+  //           this.selectedShapeIndex !== null &&
+  //           this.selectedShapeIndex > index
+  //         ) {
+  //           // keep pointing at the same shape after the splice shifts everything after it down by one
+  //           this.selectedShapeIndex -= 1;
+  //         }
+  //         this.clearCanvas();
+  //       }
+  //     }
+  //   };
+  // }
 
   // ClearCanvas(){} -> Clears everything; Redraws the permanent shapes; Draw the current preview shape
   clearCanvas() {
@@ -320,34 +400,34 @@ export class Game {
     // this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
     // panning and zooming using setTransform()
-    this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY)
+    this.ctx.setTransform(this.scale, 0, 0, this.scale, this.panX, this.panY);
     this.ctx.clearRect(
-      -this.panX/this.scale,
-      -this.panY/this.scale,
-      this.canvas.width/this.scale,
-      this.canvas.height/this.scale
-    )
+      -this.panX / this.scale,
+      -this.panY / this.scale,
+      this.canvas.width / this.scale,
+      this.canvas.height / this.scale
+    );
 
     // Sets the background to black:
     this.ctx.fillStyle = "rgba(0, 0, 0)";
     // this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     this.ctx.fillRect(
-      -this.panX/this.scale,
-      -this.panY/this.scale,
-      this.canvas.width/this.scale,
-      this.canvas.height/this.scale
+      -this.panX / this.scale,
+      -this.panY / this.scale,
+      this.canvas.width / this.scale,
+      this.canvas.height / this.scale
     );
 
     // Every shape stroke defaults to white — set explicitly here rather than relying on
     // whatever strokeStyle a previous draw call happened to leave on the context (only "rect"
     // ever set it itself, so on a fresh canvas every other shape type drew invisibly in the
     // default black, matching the background, until *something* else set it to white first).
-    //TODO: this.ctx.strokeStyle = "rgba(255, 255, 255)";
+    //this.ctx.strokeStyle = "rgba(255, 255, 255)";
 
     // Redraws Existing Shapes
     this.existingShapes.forEach((shape) => {
-      if(shape.id === this.editingShapeId) return; // being edited live in the textarea overlay
-      
+      if (shape.id === this.editingShapeId) return; // being edited live in the textarea overlay
+
       // A single malformed/legacy shape (mismatched fields for its type, producing NaN
       // geometry) must not be able to abort this loop and hide every shape after it —
       // e.g. ctx.ellipse() throws synchronously on non-finite radii.
@@ -358,42 +438,58 @@ export class Game {
       }
     });
 
-    if (this.selectedShapeIndex !== null && this.existingShapes[this.selectedShapeIndex]) {
+    if (
+      this.selectedShapeIndex !== null &&
+      this.existingShapes[this.selectedShapeIndex]
+    ) {
       this.drawSelectionOutline(this.existingShapes[this.selectedShapeIndex]);
     }
     this.syncPanel();
   }
 
   private drawShape(shape: Shape) {
-      const box = SelectionLogic.getBoundingBox(shape)
-      const cx = box.x + box.width / 2;
-      const cy = box.y + box.height / 2;
+    const box = SelectionLogic.getBoundingBox(shape);
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
 
-      this.ctx.save();
-      try {
-        this.ctx.globalAlpha = this.eraserMarkedIds.has(shape.id) ? ERASER_DIM_OPACITY : 1;
+    this.ctx.save();
+    try {
+      this.ctx.globalAlpha = this.eraserMarkedIds.has(shape.id)
+        ? ERASER_DIM_OPACITY
+        : 1;
       this.ctx.translate(cx, cy);
       this.ctx.rotate(shape.rotation);
       this.ctx.translate(-cx, -cy);
       this.ctx.strokeStyle = shape.strokeColour ?? DEFAULT_STROKE_COLOUR;
-      this.ctx.lineWidth = shape.type !== "text" ? (shape.strokeWidth ?? DEFAULT_STROKE_WIDTH) : this.ctx.lineWidth;
-      const strokeWidth = shape.type !== "text" ? (shape.strokeWidth ?? DEFAULT_STROKE_WIDTH) : DEFAULT_STROKE_WIDTH;
-      const strokeStyle = shape.type !== "text" ? (shape.strokeStyle ?? DEFAULT_STROKE_STYLE) : "solid";
+      this.ctx.lineWidth =
+        shape.type !== "text"
+          ? (shape.strokeWidth ?? DEFAULT_STROKE_WIDTH)
+          : this.ctx.lineWidth;
+      const strokeWidth =
+        shape.type !== "text"
+          ? (shape.strokeWidth ?? DEFAULT_STROKE_WIDTH)
+          : DEFAULT_STROKE_WIDTH;
+      const strokeStyle =
+        shape.type !== "text"
+          ? (shape.strokeStyle ?? DEFAULT_STROKE_STYLE)
+          : "solid";
       this.ctx.setLineDash(
-        strokeStyle === "dashed" ? [strokeWidth * 8, strokeWidth * 2]
-        : strokeStyle === "dotted" ? [strokeWidth, strokeWidth * 2]
-        : []
+        strokeStyle === "dashed"
+          ? [strokeWidth * 8, strokeWidth * 2]
+          : strokeStyle === "dotted"
+            ? [strokeWidth, strokeWidth * 2]
+            : []
       );
       // Drawing logic of each shape type
       if (shape.type === "rect") {
         // this.ctx.strokeStyle = "rgba(255, 255, 255)";
         const edge = shape.strokeEdge ?? DEFAULT_STROKE_EDGE;
-        const x = Math.min(shape.x, shape.x + shape.width)
+        const x = Math.min(shape.x, shape.x + shape.width);
         const y = Math.min(shape.y, shape.y + shape.height);
         const w = Math.abs(shape.width);
         const h = Math.abs(shape.height);
         let radius = 0;
-        if(edge === "round") {
+        if (edge === "round") {
           radius = Math.min(Math.max(w, h) / 20, w / 2, h / 2);
         }
         this.ctx.beginPath();
@@ -424,21 +520,20 @@ export class Game {
         this.ctx.lineTo(shape.endX, shape.endY);
         this.ctx.stroke();
       } else if (shape.type === "triangle") {
-        
         const height = (shape.side * Math.sqrt(3)) / 2;
         const vertices = [
           { x: shape.x + shape.side / 2, y: shape.y },
           { x: shape.x, y: shape.y + height },
-          { x: shape.x + shape.side, y: shape.y + height }
+          { x: shape.x + shape.side, y: shape.y + height },
         ];
         const edge = shape.strokeEdge ?? DEFAULT_STROKE_EDGE;
         let radius = 0;
-        if(edge === "round") {
+        if (edge === "round") {
           radius = Math.max(0, Math.min(shape.side / 20, height / 2));
         }
 
-         this.ctx.beginPath();
-         this.tracePolygonPath(vertices, radius);
+        this.ctx.beginPath();
+        this.tracePolygonPath(vertices, radius);
         // const height = (shape.side * Math.sqrt(3)) / 2;
         // this.ctx.moveTo(shape.x + shape.side / 2, shape.y);
         // this.ctx.lineTo(shape.x, shape.y + height);
@@ -458,8 +553,8 @@ export class Game {
           });
 
           //----applying bg fill logic for pencil------
-          if(SelectionLogic.isPencilPathClosed(shape.points)) {
-            this.ctx.fillStyle  =shape.bgFill ?? DEFAULT_BG_FILL;
+          if (SelectionLogic.isPencilPathClosed(shape.points)) {
+            this.ctx.fillStyle = shape.bgFill ?? DEFAULT_BG_FILL;
             this.ctx.fill();
           }
           this.ctx.stroke();
@@ -468,10 +563,20 @@ export class Game {
       } else if (shape.type === "diamond") {
         this.ctx.fillStyle = shape.bgFill ?? DEFAULT_BG_FILL;
         const edge = shape.strokeEdge ?? DEFAULT_STROKE_EDGE;
-        const sideLength = Math.min(Math.hypot(shape.width / 2, shape.height / 2), shape.width, shape.height)
+        const sideLength = Math.min(
+          Math.hypot(shape.width / 2, shape.height / 2),
+          shape.width,
+          shape.height
+        );
         let radius = 0;
-        if(edge === "round") {
-          radius = Math.max(0, Math.min(sideLength * 0.08, Math.min(shape.width, shape.height) * 0.15))
+        if (edge === "round") {
+          radius = Math.max(
+            0,
+            Math.min(
+              sideLength * 0.08,
+              Math.min(shape.width, shape.height) * 0.15
+            )
+          );
         }
         this.DiamondShape(shape.x, shape.y, shape.width, shape.height, radius);
       } else if (shape.type === "arrow") {
@@ -483,19 +588,28 @@ export class Game {
         this.ctx.font = `${shape.fontSize}px ${FONT_FAMILIES[family].css}`;
         this.ctx.textBaseline = "top";
         this.ctx.textAlign = align;
-        const tx = align === "center" ? shape.x + shape.width / 2 : align === "right" ? shape.x + shape.width: shape.x
+        const tx =
+          align === "center"
+            ? shape.x + shape.width / 2
+            : align === "right"
+              ? shape.x + shape.width
+              : shape.x;
         shape.text.split("\n").forEach((line, i) => {
-          this.ctx.fillText(line, tx, shape.y + i * shape.fontSize * LINE_HEIGHT)
+          this.ctx.fillText(
+            line,
+            tx,
+            shape.y + i * shape.fontSize * LINE_HEIGHT
+          );
         });
       }
-      } finally {
-        this.ctx.restore()
-      }
+    } finally {
+      this.ctx.restore();
+    }
   }
 
   // mouseDownHandler: User presses the mouse button; shapes begin to draw; Records where the user started to clicking
   mouseDownHandler = (e: MouseEvent) => {
-    const {x, y} = this.transformScreenToWorld(e.clientX, e.clientY)
+    const { x, y } = this.transformScreenToWorld(e.clientX, e.clientY);
     this.clicked = true;
 
     // this.startX = e.clientX;
@@ -515,8 +629,14 @@ export class Game {
           SELECTION_PADDING / this.scale
         );
         const local = SelectionLogic.toLocalPoint(x, y, box, selected.rotation);
-        const rotateHandlePos = SelectionLogic.getRotateHandlePosition(box, ROTATE_HANDLE_OFFSET / this.scale);
-        const distToRotateHandle = Math.hypot(local.x - rotateHandlePos.x, local.y - rotateHandlePos.y);
+        const rotateHandlePos = SelectionLogic.getRotateHandlePosition(
+          box,
+          ROTATE_HANDLE_OFFSET / this.scale
+        );
+        const distToRotateHandle = Math.hypot(
+          local.x - rotateHandlePos.x,
+          local.y - rotateHandlePos.y
+        );
         if (distToRotateHandle <= HANDLE_SCREEN_SIZE / this.scale) {
           const cx = box.x + box.width / 2;
           const cy = box.y + box.height / 2;
@@ -526,7 +646,12 @@ export class Game {
           this.shapeRotationAtStart = selected.rotation;
           return;
         }
-        const handle = SelectionLogic.hitTestHandle(box, local.x, local.y, HANDLE_SCREEN_SIZE / this.scale);
+        const handle = SelectionLogic.hitTestHandle(
+          box,
+          local.x,
+          local.y,
+          HANDLE_SCREEN_SIZE / this.scale
+        );
         if (handle) {
           this.activeHandle = handle;
           this.resizeAnchor = SelectionLogic.getResizeAnchor(box, handle);
@@ -536,7 +661,12 @@ export class Game {
         }
       }
 
-      const hitIndex = SelectionLogic.hitTest(this.existingShapes, x, y, HIT_TEST_PADDING / this.scale);
+      const hitIndex = SelectionLogic.hitTest(
+        this.existingShapes,
+        x,
+        y,
+        HIT_TEST_PADDING / this.scale
+      );
       this.selectedShapeIndex = hitIndex;
       this.isDraggingShape = hitIndex !== null;
       this.clearCanvas();
@@ -548,7 +678,7 @@ export class Game {
       return;
     }
 
-    if(this.selectedTool === "grab") {
+    if (this.selectedTool === "grab") {
       // grab tool stores raw client coords, not world coords —
       // the mousemove handler re-derives world coords from these each frame
 
@@ -571,7 +701,8 @@ export class Game {
     this.clicked = false;
 
     if (this.selectedTool === "select") {
-      const wasEditing = this.activeHandle !== null || this.isDraggingShape || this.isRotating;
+      const wasEditing =
+        this.activeHandle !== null || this.isDraggingShape || this.isRotating;
       const editedIndex = this.selectedShapeIndex;
       this.activeHandle = null;
       this.resizeAnchor = null;
@@ -582,19 +713,20 @@ export class Game {
 
       if (wasEditing && editedIndex !== null) {
         const shape = this.existingShapes[editedIndex];
-        this.socket.send(
-          JSON.stringify({
-            type: "shape_update",
-            shapeId: shape.id,
-            message: JSON.stringify({ shape }),
-            roomId: this.roomId,
-          })
-        );
+        this.send({
+          type: "shape_update",
+          shapeId: shape.id,
+          message: JSON.stringify({ shape }),
+          roomId: this.roomId,
+        });
       }
       return; // select tool never creates a new shape
     }
 
-    const { x: endX, y: endY } = this.transformScreenToWorld(e.clientX, e.clientY);
+    const { x: endX, y: endY } = this.transformScreenToWorld(
+      e.clientX,
+      e.clientY
+    );
     const width = endX - this.startX;
     const height = endY - this.startY;
 
@@ -687,8 +819,8 @@ export class Game {
       const dy = endY - this.startY;
 
       // center of the diamond from where the drag happens
-      const cx = this.startX + dx/2;
-      const cy = this.startY + dy/2;
+      const cx = this.startX + dx / 2;
+      const cy = this.startY + dy / 2;
 
       const width = Math.abs(dx);
       const height = Math.abs(dy);
@@ -704,8 +836,8 @@ export class Game {
         x: cx,
         y: cy,
         width: width,
-        height: height
-      }
+        height: height,
+      };
     } else if (selectedTool === "arrow") {
       shape = {
         id: newShapeId,
@@ -717,8 +849,8 @@ export class Game {
         x: this.startX,
         y: this.startY,
         toX: endX,
-        toY: endY
-      }
+        toY: endY,
+      };
     }
 
     if (!shape) {
@@ -727,16 +859,14 @@ export class Game {
 
     this.existingShapes.push(shape);
 
-    this.socket.send(
-      JSON.stringify({
-        type: "chat",
-        shapeId: shape.id,
-        message: JSON.stringify({
-          shape,
-        }),
-        roomId: this.roomId,
-      })
-    );
+    this.send({
+      type: "chat",
+      shapeId: shape.id,
+      message: JSON.stringify({
+        shape,
+      }),
+      roomId: this.roomId,
+    });
   };
 
   // mouseMoveHandler: While user drag the mouse it shows live preview of the shape.
@@ -756,11 +886,13 @@ export class Game {
       this.ctx.strokeStyle = this.currentStrokeColour;
       this.ctx.lineWidth = this.currentStrokeWidth;
       this.ctx.fillStyle = this.currentBgFill;
-      
+
       this.ctx.setLineDash(
-        this.currentStrokeStyle === "dashed" ? [this.currentStrokeWidth * 8, this.currentStrokeWidth * 2]
-        : this.currentStrokeStyle === "dotted" ? [this.currentStrokeWidth, this.currentStrokeWidth * 2]
-        : []
+        this.currentStrokeStyle === "dashed"
+          ? [this.currentStrokeWidth * 8, this.currentStrokeWidth * 2]
+          : this.currentStrokeStyle === "dotted"
+            ? [this.currentStrokeWidth, this.currentStrokeWidth * 2]
+            : []
       );
 
       if (selectedTool === "rect") {
@@ -866,16 +998,27 @@ export class Game {
         const cy = this.startY + dy / 2;
         const width = Math.abs(dx);
         const height = Math.abs(dy);
-        const sideLength = Math.min(Math.hypot(width / 2, height / 2), width, height);
+        const sideLength = Math.min(
+          Math.hypot(width / 2, height / 2),
+          width,
+          height
+        );
         let radius = 0;
         if (this.currentStrokeEdge === "round") {
-          radius = Math.max(0, Math.min(sideLength * 0.08, Math.min(width, height) * 0.15));
+          radius = Math.max(
+            0,
+            Math.min(sideLength * 0.08, Math.min(width, height) * 0.15)
+          );
         }
         this.DiamondShape(cx, cy, width, height, radius);
       } else if (selectedTool === "arrow") {
-        this.ArrowShape(this.startX, this.startY, curX, curY)
+        this.ArrowShape(this.startX, this.startY, curX, curY);
       } else if (selectedTool === "select") {
-        if (this.isRotating && this.rotationPivot !== null && this.selectedShapeIndex !== null) {
+        if (
+          this.isRotating &&
+          this.rotationPivot !== null &&
+          this.selectedShapeIndex !== null
+        ) {
           const pivot = this.rotationPivot;
           const currentAngle = Math.atan2(curY - pivot.y, curX - pivot.x);
           const delta = currentAngle - this.rotationStartAngle;
@@ -883,9 +1026,19 @@ export class Game {
             ...this.existingShapes[this.selectedShapeIndex],
             rotation: this.shapeRotationAtStart + delta,
           };
-        } else if (this.activeHandle !== null && this.resizeAnchor !== null && this.selectedShapeIndex !== null && this.resizeStartBox) {
+        } else if (
+          this.activeHandle !== null &&
+          this.resizeAnchor !== null &&
+          this.selectedShapeIndex !== null &&
+          this.resizeStartBox
+        ) {
           const anchor = this.resizeAnchor;
-          const localPoint = SelectionLogic.toLocalPoint(curX, curY, this.resizeStartBox, this.resizeRotation);
+          const localPoint = SelectionLogic.toLocalPoint(
+            curX,
+            curY,
+            this.resizeStartBox,
+            this.resizeRotation
+          );
           // anchor/localPoint are both padded-outline corners (resizeAnchor/resizeStartBox were
           // captured from the padded box) — shrink back by the same padding to get the shape's
           // real, unpadded geometry before writing it
@@ -895,23 +1048,28 @@ export class Game {
             width: Math.abs(localPoint.x - anchor.x),
             height: Math.abs(localPoint.y - anchor.y),
           };
-          const box = SelectionLogic.getPaddedBox(paddedBox, -(SELECTION_PADDING / this.scale));
-          this.existingShapes[this.selectedShapeIndex] = SelectionLogic.applyBoundingBox(
-            this.existingShapes[this.selectedShapeIndex],
-            box
+          const box = SelectionLogic.getPaddedBox(
+            paddedBox,
+            -(SELECTION_PADDING / this.scale)
           );
+          this.existingShapes[this.selectedShapeIndex] =
+            SelectionLogic.applyBoundingBox(
+              this.existingShapes[this.selectedShapeIndex],
+              box
+            );
         } else if (this.isDraggingShape && this.selectedShapeIndex !== null) {
           const dx = curX - this.startX;
           const dy = curY - this.startY;
-          this.existingShapes[this.selectedShapeIndex] = SelectionLogic.translateShape(
-            this.existingShapes[this.selectedShapeIndex],
-            dx,
-            dy
-          );
+          this.existingShapes[this.selectedShapeIndex] =
+            SelectionLogic.translateShape(
+              this.existingShapes[this.selectedShapeIndex],
+              dx,
+              dy
+            );
           this.startX = curX;
           this.startY = curY;
         }
-        this.clearCanvas()
+        this.clearCanvas();
       } else if (selectedTool === "eraser") {
         // mouseup is only heard on the canvas, so a release over the toolbar never reaches
         // mouseUpHandler — without this check the eraser keeps deleting with no button held
@@ -920,11 +1078,13 @@ export class Game {
           return;
         }
         this.markAlongPath(curX, curY);
-
       } else if (this.clicked && selectedTool === "grab") {
-        
-        const {x: trasformedX, y: transformedY} = this.transformScreenToWorld(e.clientX, e.clientY)
-        const {x: startTransformedX, y: startTransformedY} = this.transformScreenToWorld(this.startX, this.startY)
+        const { x: trasformedX, y: transformedY } = this.transformScreenToWorld(
+          e.clientX,
+          e.clientY
+        );
+        const { x: startTransformedX, y: startTransformedY } =
+          this.transformScreenToWorld(this.startX, this.startY);
 
         const deltaX = trasformedX - startTransformedX;
         const deltaY = transformedY - startTransformedY;
@@ -934,9 +1094,9 @@ export class Game {
         this.startX = e.clientX;
         this.startY = e.clientY;
 
-        this.saveViewport() // for saving to localstorage
+        this.saveViewport(); // for saving to localstorage
 
-        this.clearCanvas()
+        this.clearCanvas();
       }
     }
   };
@@ -945,54 +1105,66 @@ export class Game {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
       // zoom
-      const scaleAmount = -e.deltaY/200 // for scrollling "up" // -ve deltaY means zoom in
-      const newScale = Game.clampScale(this.scale * (1 + scaleAmount))
+      const scaleAmount = -e.deltaY / 200; // for scrollling "up" // -ve deltaY means zoom in
+      const newScale = Game.clampScale(this.scale * (1 + scaleAmount));
 
-      const mouseX = e.clientX - this.canvas.offsetLeft
-      const mouseY = e.clientY - this.canvas.offsetTop
+      const mouseX = e.clientX - this.canvas.offsetLeft;
+      const mouseY = e.clientY - this.canvas.offsetTop;
 
-      const worldX = (mouseX-this.panX)/this.scale;
-      const worldY = (mouseY-this.panY)/this.scale;
+      const worldX = (mouseX - this.panX) / this.scale;
+      const worldY = (mouseY - this.panY) / this.scale;
 
-      this.panX -= worldX * (newScale - this.scale)
-      this.panY -= worldY * (newScale - this.scale)
+      this.panX -= worldX * (newScale - this.scale);
+      this.panY -= worldY * (newScale - this.scale);
 
-      this.scale = newScale
-      this.onScaleChange(this.scale)
-      this.saveViewport() // for saving to localstorage
+      this.scale = newScale;
+      this.onScaleChange(this.scale);
+      this.saveViewport(); // for saving to localstorage
     } else {
       // pan
-      this.panX -= e.deltaX,
-      this.panY -= e.deltaY
-      this.saveViewport() // for saving to localstorage
+      ((this.panX -= e.deltaX), (this.panY -= e.deltaY));
+      this.saveViewport(); // for saving to localstorage
     }
-    this.clearCanvas()
-  }
+    this.clearCanvas();
+  };
 
   dblClickHandler = (e: MouseEvent) => {
     if (this.selectedTool !== "select" || this.enableTextArea) return;
-    const {x, y} = this.transformScreenToWorld(e.clientX, e.clientY);
-    const i = SelectionLogic.hitTest(this.existingShapes, x, y, HIT_TEST_PADDING/this.scale);
-    if(i===null) return;
+    const { x, y } = this.transformScreenToWorld(e.clientX, e.clientY);
+    const i = SelectionLogic.hitTest(
+      this.existingShapes,
+      x,
+      y,
+      HIT_TEST_PADDING / this.scale
+    );
+    if (i === null) return;
     const shape = this.existingShapes[i];
-    if(shape.type !== "text") return;
+    if (shape.type !== "text") return;
     this.textEditing(shape.x, shape.y, shape);
-  }
+  };
 
   initMouseHandlers() {
     this.canvas.addEventListener("mouseup", this.mouseUpHandler);
     this.canvas.addEventListener("mousedown", this.mouseDownHandler);
     this.canvas.addEventListener("mousemove", this.mouseMoveHandler);
-    this.canvas.addEventListener("wheel", this.mouseWheelHandler, {passive: false});
-    this.canvas.addEventListener("dblclick", this.dblClickHandler)
+    this.canvas.addEventListener("wheel", this.mouseWheelHandler, {
+      passive: false,
+    });
+    this.canvas.addEventListener("dblclick", this.dblClickHandler);
   }
 
   // TODO:-----------Shape Logic...will be moved to saperate file later on----------------
 
-  DiamondShape(centerX: number, centerY: number, width: number, height: number, radius = 0) {
+  DiamondShape(
+    centerX: number,
+    centerY: number,
+    width: number,
+    height: number,
+    radius = 0
+  ) {
     const halfWidth = width / 2;
     const halfHeight = height / 2;
-    
+
     // const topX = centerX;
     // const topY = centerY - halfHeight;
 
@@ -1008,26 +1180,26 @@ export class Game {
     const vertices = [
       { x: centerX, y: centerY - halfHeight },
       { x: centerX + halfWidth, y: centerY },
-      { x: centerX, y: centerY + halfHeight},
-      { x: centerX - halfWidth, y: centerY}
+      { x: centerX, y: centerY + halfHeight },
+      { x: centerX - halfWidth, y: centerY },
     ];
 
     this.ctx.beginPath();
     this.tracePolygonPath(vertices, radius);
-    this.ctx.fill()
+    this.ctx.fill();
     this.ctx.stroke();
   }
 
   ArrowShape(fromX: number, fromY: number, toX: number, toY: number) {
-    var arrowHeadAngle = Math.atan2(toY-fromY, toX-fromX)
+    var arrowHeadAngle = Math.atan2(toY - fromY, toX - fromX);
     var ARROW_HEAD_LENGTH = 10;
 
-    const arrowLength = ARROW_HEAD_LENGTH
+    const arrowLength = ARROW_HEAD_LENGTH;
 
-    const arrowX1 = toX - arrowLength * Math.cos(arrowHeadAngle - Math.PI / 6)
-    const arrowY1 = toY - arrowLength * Math.sin(arrowHeadAngle - Math.PI / 6)
-    const arrowX2 = toX - arrowLength * Math.cos(arrowHeadAngle + Math.PI / 6)
-    const arrowY2 = toY - arrowLength * Math.sin(arrowHeadAngle + Math.PI / 6)
+    const arrowX1 = toX - arrowLength * Math.cos(arrowHeadAngle - Math.PI / 6);
+    const arrowY1 = toY - arrowLength * Math.sin(arrowHeadAngle - Math.PI / 6);
+    const arrowX2 = toX - arrowLength * Math.cos(arrowHeadAngle + Math.PI / 6);
+    const arrowY2 = toY - arrowLength * Math.sin(arrowHeadAngle + Math.PI / 6);
 
     this.ctx.beginPath();
     this.ctx.moveTo(fromX, fromY);
@@ -1040,12 +1212,15 @@ export class Game {
 
   //----------------------------Panning and Zooming-----------------------------------------------
 
-  transformScreenToWorld(clientX: number, clientY: number): {x: number; y: number} {
+  transformScreenToWorld(
+    clientX: number,
+    clientY: number
+  ): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
-    const x = (clientX - rect.left - this.panX)/this.scale;
-    const y = (clientY - rect.top - this.panY)/this.scale;
-    return {x, y};
-  };
+    const x = (clientX - rect.left - this.panX) / this.scale;
+    const y = (clientY - rect.top - this.panY) / this.scale;
+    return { x, y };
+  }
 
   // keeps zoom inside MIN_ZOOM..MAX_ZOOM — without a limit, drawing while zoomed far out
   // creates shapes with enormous world coordinates (see room 15 in logic.md)
@@ -1066,10 +1241,10 @@ export class Game {
     this.panX -= worldCenterX * (newScale - this.scale);
     this.panY -= worldCenterY * (newScale - this.scale);
 
-    this.scale = newScale
-    this.onScaleChange(this.scale)
-    this.saveViewport() // for saving to localstorage
-    this.clearCanvas()
+    this.scale = newScale;
+    this.onScaleChange(this.scale);
+    this.saveViewport(); // for saving to localstorage
+    this.clearCanvas();
   }
 
   onScaleChange(scale: number) {
@@ -1081,25 +1256,30 @@ export class Game {
   }
 
   //----------------------------Panning and Zooming-----------------------------------------
-  
+
   // Builds a per-room storage key so switching rooms doesn't leak one room's saved camera position into another's
   private viewportStorageKey(): string {
     return `${VIEWPORT_SECRET_KEY}${this.roomId}`;
   }
-  
+
   // Debounced write of panX/panY/scale to localStorage — only persists once pan/zoom activity pauses for 150ms
   private saveViewport() {
-    if(this.saveViewportTimeout) clearTimeout(this.saveViewportTimeout) // cancel any pending save
-    this.saveViewportTimeout = setTimeout(() => { // schedule a new one, remember its handle
+    if (this.saveViewportTimeout) clearTimeout(this.saveViewportTimeout); // cancel any pending save
+    this.saveViewportTimeout = setTimeout(() => {
+      // schedule a new one, remember its handle
       try {
         localStorage.setItem(
           this.viewportStorageKey(),
-          JSON.stringify({panX: this.panX, panY: this.panY, scale: this.scale})
-        )
+          JSON.stringify({
+            panX: this.panX,
+            panY: this.panY,
+            scale: this.scale,
+          })
+        );
       } catch (e) {
-        console.error("Error saving viewport to localStorage:", e)
+        console.error("Error saving viewport to localStorage:", e);
       }
-    }, 150)
+    }, 150);
   }
 
   // -------------------------- For selection logic--------------------------------------------
@@ -1142,9 +1322,18 @@ export class Game {
       }
     });
 
-    const rotateHandle = SelectionLogic.getRotateHandlePosition(box, ROTATE_HANDLE_OFFSET / this.scale);
+    const rotateHandle = SelectionLogic.getRotateHandlePosition(
+      box,
+      ROTATE_HANDLE_OFFSET / this.scale
+    );
     this.ctx.beginPath();
-    this.ctx.arc(rotateHandle.x, rotateHandle.y, handleSize / 2, 0, Math.PI * 2);
+    this.ctx.arc(
+      rotateHandle.x,
+      rotateHandle.y,
+      handleSize / 2,
+      0,
+      Math.PI * 2
+    );
     this.ctx.fillStyle = "white";
     this.ctx.fill();
     this.ctx.strokeStyle = SELECTION_COLOR;
@@ -1190,15 +1379,15 @@ export class Game {
     this.clicked = false;
     if (this.eraserMarkedIds.size === 0) return;
 
-    this.existingShapes = this.existingShapes.filter((shape) => !this.eraserMarkedIds.has(shape.id));
+    this.existingShapes = this.existingShapes.filter(
+      (shape) => !this.eraserMarkedIds.has(shape.id)
+    );
     this.eraserMarkedIds.forEach((shapeId) => {
-      this.socket.send(
-        JSON.stringify({
-          type: "shape_delete",
-          shapeId,
-          roomId: this.roomId,
-        })
-      );
+      this.send({
+        type: "shape_delete",
+        shapeId,
+        roomId: this.roomId,
+      });
     });
     this.eraserMarkedIds.clear();
     this.clearCanvas();
@@ -1220,11 +1409,10 @@ export class Game {
   }
 
   private textEditing(worldX: number, worldY: number, existing?: TextShape) {
-    const textArea = document.createElement("textarea")
+    const textArea = document.createElement("textarea");
     this.enableTextArea = textArea;
 
     this.editingShapeId = existing?.id ?? null;
-
 
     Object.assign(textArea.style, {
       position: "absolute",
@@ -1242,9 +1430,9 @@ export class Game {
       overflow: "hidden",
       whiteSpace: "pre",
       color: "white",
-      zIndex: "100"
-    })
-    const fontSize = existing?.fontSize ?? this.currentFontSize; 
+      zIndex: "100",
+    });
+    const fontSize = existing?.fontSize ?? this.currentFontSize;
     this.editingFontSize = fontSize;
     const fontFamily = existing?.fontFamily ?? this.currentFontFamily;
     this.editingFontFamily = fontFamily;
@@ -1255,57 +1443,61 @@ export class Game {
     this.editingStrokeColour = strokeColour;
     textArea.style.color = strokeColour;
     this.syncPanel();
-    textArea.style.font = `${fontSize*this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[fontFamily].css}`;
-    textArea.style.transform = `translate(${worldX * this.scale + this.panX}px, ${worldY * this.scale + this.panY}px)`
+    textArea.style.font = `${fontSize * this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[fontFamily].css}`;
+    textArea.style.transform = `translate(${worldX * this.scale + this.panX}px, ${worldY * this.scale + this.panY}px)`;
 
     this.canvas.parentElement?.appendChild(textArea);
-    if(existing) {
+    if (existing) {
       textArea.value = existing.text;
       this.clearCanvas();
     }
     setTimeout(() => {
       textArea.focus();
-      if(existing) textArea.select();
+      if (existing) textArea.select();
     }, 0);
 
-     // hidden span measures the current text so the textarea can grow to fit it live
-     const span = document.createElement("span")
-     Object.assign(span.style, {
+    // hidden span measures the current text so the textarea can grow to fit it live
+    const span = document.createElement("span");
+    Object.assign(span.style, {
       visibility: "hidden",
       position: "absolute",
       top: "0",
       left: "0",
       pointerEvents: "none",
       whiteSpace: "pre",
-      font: textArea.style.font, 
-     })
-     document.body.appendChild(span);
+      font: textArea.style.font,
+    });
+    document.body.appendChild(span);
 
-     const resize = () => {
+    const resize = () => {
       span.textContent = textArea.value || " ";
       textArea.style.width = `${span.offsetWidth + 4}px`;
       textArea.style.height = `${span.offsetHeight + 4}px`;
-     };
-     resize();
-     textArea.addEventListener("input", resize)
+    };
+    resize();
+    textArea.addEventListener("input", resize);
 
-     this.updateEditorFont = () => {
+    this.updateEditorFont = () => {
       const font = `${this.editingFontSize * this.scale}px/${LINE_HEIGHT} ${FONT_FAMILIES[this.editingFontFamily].css}`;
       textArea.style.font = font;
       textArea.style.textAlign = this.editingTextAlign;
-      textArea.style.color = this.editingStrokeColour
+      textArea.style.color = this.editingStrokeColour;
       span.style.font = font;
       resize();
-     };
+    };
 
-     let saved = false;
-     const save = () => {
+    let saved = false;
+    const save = () => {
       if (saved) return;
       saved = true;
       const text = textArea.value.trim();
       // canvas-measured, not DOM-measured — offsetWidth/offsetHeight can read back 0 in edge
       // cases (e.g. a backgrounded tab), which produced a real, zero-area, unselectable shape
-      const { width, height } = this.measureText(text || " ", this.editingFontSize, fontFamily);
+      const { width, height } = this.measureText(
+        text || " ",
+        this.editingFontSize,
+        fontFamily
+      );
       this.enableTextArea = null;
       this.updateEditorFont = null;
       this.editingShapeId = null;
@@ -1321,22 +1513,34 @@ export class Game {
         }
         if (!text) {
           this.existingShapes.splice(i, 1);
-          this.socket.send(JSON.stringify({ type: "shape_delete", shapeId: existing.id, roomId: this.roomId }));
+          this.send({
+            type: "shape_delete",
+            shapeId: existing.id,
+            roomId: this.roomId,
+          });
         } else {
-          const updated: Shape = { ...existing, text, fontFamily, fontSize: this.editingFontSize, textAlign: this.editingTextAlign, width, height };
+          const updated: Shape = {
+            ...existing,
+            text,
+            fontFamily,
+            fontSize: this.editingFontSize,
+            textAlign: this.editingTextAlign,
+            width,
+            height,
+          };
           this.existingShapes[i] = updated;
-          this.socket.send(JSON.stringify({
+          this.send({
             type: "shape_update",
             shapeId: updated.id,
             message: JSON.stringify({ shape: updated }),
             roomId: this.roomId,
-          }));
+          });
         }
         this.clearCanvas();
         return;
       }
 
-      if(!text){
+      if (!text) {
         this.clearCanvas();
         return;
       }
@@ -1356,83 +1560,106 @@ export class Game {
         height,
       };
       this.existingShapes.push(shape);
-      this.socket.send(
-        JSON.stringify({
-          type: "chat",
-          shapeId: shape.id,
-          message: JSON.stringify({ shape }),
-          roomId: this.roomId,
-        })
-      );
+      this.send({
+        type: "chat",
+        shapeId: shape.id,
+        message: JSON.stringify({ shape }),
+        roomId: this.roomId,
+      });
       this.clearCanvas();
-     }
-     textArea.addEventListener("blur", save);
-     textArea.addEventListener("keydown", (e) => {
-      if(e.key === "Enter" && (e.ctrlKey || e.metaKey)){
+    };
+    textArea.addEventListener("blur", save);
+    textArea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         save();
-      } else if(e.key === "Escape") {
+      } else if (e.key === "Escape") {
         saved = true;
         textArea.remove();
         span.remove();
         this.enableTextArea = null;
         this.editingShapeId = null;
-        this.clearCanvas()
+        this.clearCanvas();
       }
-     })
+    });
   }
 
   //-----------------------------for panel(where diffrent stroke, colours, and text styles will be stored)-------------
-  private syncPanel(){
+  private syncPanel() {
     let state: PanelState | null = null;
-    if(this.enableTextArea) {
-      state = {strokeColor: this.editingStrokeColour, text: {fontFamily: this.editingFontFamily, fontSize: this.editingFontSize, textAlign: this.editingTextAlign}}
+    if (this.enableTextArea) {
+      state = {
+        strokeColor: this.editingStrokeColour,
+        text: {
+          fontFamily: this.editingFontFamily,
+          fontSize: this.editingFontSize,
+          textAlign: this.editingTextAlign,
+        },
+      };
     } else if (this.selectedShapeIndex !== null) {
       const s = this.existingShapes[this.selectedShapeIndex];
-      const hasBg = s.type === "rect" || s.type === "circle" || s.type === "triangle" || s.type === "diamond" || s.type === "pencil";
+      const hasBg =
+        s.type === "rect" ||
+        s.type === "circle" ||
+        s.type === "triangle" ||
+        s.type === "diamond" ||
+        s.type === "pencil";
       if (s) {
         state = {
           strokeColor: s.strokeColour ?? DEFAULT_STROKE_COLOUR,
-          strokeWidth: s.type !== "text" ? (s.strokeWidth ?? DEFAULT_STROKE_WIDTH) : undefined,
-          strokeStyle: s.type !== "text" ? (s.strokeStyle ?? DEFAULT_STROKE_STYLE) : undefined,
-          bgFill: hasBg ? (s.bgFill ?? DEFAULT_BG_FILL) : undefined, 
-          strokeEdge: (s.type === "rect" || s.type === "triangle" || s.type === "diamond") ? (s.strokeEdge ?? DEFAULT_STROKE_EDGE) : undefined, 
-          text: s.type === "text"
-            ? { fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY, fontSize: s.fontSize ?? DEFAULT_FONT_SIZE, textAlign: s.textAlign ?? DEFAULT_TEXT_ALIGN }
-            : undefined,
+          strokeWidth:
+            s.type !== "text"
+              ? (s.strokeWidth ?? DEFAULT_STROKE_WIDTH)
+              : undefined,
+          strokeStyle:
+            s.type !== "text"
+              ? (s.strokeStyle ?? DEFAULT_STROKE_STYLE)
+              : undefined,
+          bgFill: hasBg ? (s.bgFill ?? DEFAULT_BG_FILL) : undefined,
+          strokeEdge:
+            s.type === "rect" || s.type === "triangle" || s.type === "diamond"
+              ? (s.strokeEdge ?? DEFAULT_STROKE_EDGE)
+              : undefined,
+          text:
+            s.type === "text"
+              ? {
+                  fontFamily: s.fontFamily ?? DEFAULT_FONT_FAMILY,
+                  fontSize: s.fontSize ?? DEFAULT_FONT_SIZE,
+                  textAlign: s.textAlign ?? DEFAULT_TEXT_ALIGN,
+                }
+              : undefined,
         };
       }
     }
     const key = JSON.stringify(state);
-    if(key === this.lastPanelKey) return;
+    if (key === this.lastPanelKey) return;
     this.lastPanelKey = key;
-    this.onPanelChange?.(state)
-    
+    this.onPanelChange?.(state);
   }
 
   //-------------------------FontFamily----------------------------
   setFontFamily(family: FontFamily) {
     this.currentFontFamily = family;
 
-    if(this.enableTextArea) {
+    if (this.enableTextArea) {
       this.editingFontFamily = family;
       this.updateEditorFont?.();
       this.syncPanel();
       return;
     }
 
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
       const s = this.existingShapes[i];
-      if(s.type === "text") {
-        const updated: TextShape = { ...s, fontFamily: family};
+      if (s.type === "text") {
+        const updated: TextShape = { ...s, fontFamily: family };
         this.existingShapes[i] = updated;
-        this.socket.send(JSON.stringify({
+        this.send({
           type: "shape_update",
           shapeId: updated.id,
-          message: JSON.stringify({ shape: updated}),
+          message: JSON.stringify({ shape: updated }),
           roomId: this.roomId,
-        }))
+        });
       }
     }
     this.clearCanvas();
@@ -1441,27 +1668,31 @@ export class Game {
   setFontSize(size: number) {
     this.currentFontSize = size;
 
-    if(this.enableTextArea) {
+    if (this.enableTextArea) {
       this.editingFontSize = size;
       this.updateEditorFont?.();
       this.syncPanel();
       return;
     }
 
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
       const s = this.existingShapes[i];
-      if(s.type === "text") {
-        const {width, height} = this.measureText(s.text, size, s.fontFamily ?? DEFAULT_FONT_FAMILY);
-        const updated: TextShape = { ...s, fontSize: size, width, height};
+      if (s.type === "text") {
+        const { width, height } = this.measureText(
+          s.text,
+          size,
+          s.fontFamily ?? DEFAULT_FONT_FAMILY
+        );
+        const updated: TextShape = { ...s, fontSize: size, width, height };
 
         this.existingShapes[i] = updated;
-        this.socket.send(JSON.stringify({
+        this.send({
           type: "shape_update",
           shapeId: updated.id,
           message: JSON.stringify({ shape: updated }),
           roomId: this.roomId,
-        }))
+        });
       }
     }
     this.clearCanvas();
@@ -1470,49 +1701,49 @@ export class Game {
   setTextAlign(align: TextAlign) {
     this.currentTextAlign = align;
 
-    if(this.enableTextArea) {
+    if (this.enableTextArea) {
       this.editingTextAlign = align;
       this.updateEditorFont?.();
       this.syncPanel();
-      return
+      return;
     }
 
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
       const s = this.existingShapes[i];
-      if(s.type === "text") {
-        const updated: TextShape = {...s, textAlign: align};
+      if (s.type === "text") {
+        const updated: TextShape = { ...s, textAlign: align };
         this.existingShapes[i] = updated;
-        this.socket.send(JSON.stringify({
+        this.send({
           type: "shape_update",
           shapeId: updated.id,
           message: JSON.stringify({ shape: updated }),
           roomId: this.roomId,
-        }))
+        });
       }
     }
-    this.clearCanvas()
+    this.clearCanvas();
   }
   setStrokeColour(colour: string) {
     this.currentStrokeColour = colour;
 
-    if(this.enableTextArea) {
+    if (this.enableTextArea) {
       this.editingStrokeColour = colour;
       this.updateEditorFont?.();
       this.syncPanel();
       return;
     }
 
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
-      const updated = {...this.existingShapes[i], strokeColour: colour}
+      const updated = { ...this.existingShapes[i], strokeColour: colour };
       this.existingShapes[i] = updated;
-      this.socket.send(JSON.stringify({
+      this.send({
         type: "shape_update",
         shapeId: updated.id,
-        message: JSON.stringify({shape:updated}),
+        message: JSON.stringify({ shape: updated }),
         roomId: this.roomId,
-      }))
+      });
     }
     this.clearCanvas();
   }
@@ -1520,18 +1751,18 @@ export class Game {
   setStrokeWidth(width: number) {
     this.currentStrokeWidth = width;
 
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
       const s = this.existingShapes[i];
-      if(s.type !== "text") {
-        const updated = { ...s, strokeWidth: width};
+      if (s.type !== "text") {
+        const updated = { ...s, strokeWidth: width };
         this.existingShapes[i] = updated;
-        this.socket.send(JSON.stringify({
+        this.send({
           type: "shape_update",
           shapeId: updated.id,
           message: JSON.stringify({ shape: updated }),
           roomId: this.roomId,
-        }))
+        });
       }
     }
     this.clearCanvas();
@@ -1539,18 +1770,18 @@ export class Game {
   setStrokeStyle(style: StrokeStyle) {
     this.currentStrokeStyle = style;
 
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
       const s = this.existingShapes[i];
-      if(s.type !== "text") {
-        const updated = { ...s, strokeStyle: style};
+      if (s.type !== "text") {
+        const updated = { ...s, strokeStyle: style };
         this.existingShapes[i] = updated;
-        this.socket.send(JSON.stringify({
+        this.send({
           type: "shape_update",
           shapeId: updated.id,
           message: JSON.stringify({ shape: updated }),
           roomId: this.roomId,
-        }))
+        });
       }
     }
     this.clearCanvas();
@@ -1560,18 +1791,24 @@ export class Game {
   setBgFill(fill: string) {
     this.currentBgFill = fill;
 
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
       const s = this.existingShapes[i];
-      if(s.type === "rect" || s.type === "circle" || s.type === "triangle" || s.type === "diamond" || s.type === "pencil") {
-        const updated = { ...s, bgFill: fill};
+      if (
+        s.type === "rect" ||
+        s.type === "circle" ||
+        s.type === "triangle" ||
+        s.type === "diamond" ||
+        s.type === "pencil"
+      ) {
+        const updated = { ...s, bgFill: fill };
         this.existingShapes[i] = updated;
-        this.socket.send(JSON.stringify({
+        this.send({
           type: "shape_update",
           shapeId: updated.id,
           message: JSON.stringify({ shape: updated }),
-          roomId: this.roomId
-        }))
+          roomId: this.roomId,
+        });
       }
     }
     this.clearCanvas();
@@ -1579,39 +1816,51 @@ export class Game {
 
   setStrokeEdge(edge: StrokeEdge) {
     this.currentStrokeEdge = edge;
-    if(this.selectedShapeIndex !== null) {
+    if (this.selectedShapeIndex !== null) {
       const i = this.selectedShapeIndex;
       const s = this.existingShapes[i];
-      if(s.type === "rect" || s.type === "triangle" || s.type === "diamond") {
-        const updated = { ...s, strokeEdge: edge};
+      if (s.type === "rect" || s.type === "triangle" || s.type === "diamond") {
+        const updated = { ...s, strokeEdge: edge };
         this.existingShapes[i] = updated;
-        this.socket.send(JSON.stringify({
+        this.send({
           type: "shape_update",
           shapeId: updated.id,
-          message: JSON.stringify({ shape: updated}),
+          message: JSON.stringify({ shape: updated }),
           roomId: this.roomId,
-        }))
+        });
       }
     }
-    this.clearCanvas()
+    this.clearCanvas();
   }
 
   //-----FOR Diamond Edge----------
   // cot(half the interior angle at `corner`) — arcTo's real tangent distance from a corner
   // along an adjacent edge is `radius * this factor`, NOT just `radius` (that only holds at
   // exactly 90°; an acute corner needs a much longer pull-back, an obtuse one a shorter one).
-  private cornerTangentFactor(prev: {x:number;y:number}, corner: {x:number;y:number}, next: {x:number;y:number}) {
-    const v1x = prev.x - corner.x, v1y = prev.y - corner.y;
-    const v2x = next.x - corner.x, v2y = next.y - corner.y;
+  private cornerTangentFactor(
+    prev: { x: number; y: number },
+    corner: { x: number; y: number },
+    next: { x: number; y: number }
+  ) {
+    const v1x = prev.x - corner.x,
+      v1y = prev.y - corner.y;
+    const v2x = next.x - corner.x,
+      v2y = next.y - corner.y;
     const len1 = Math.hypot(v1x, v1y);
     const len2 = Math.hypot(v2x, v2y);
     if (len1 === 0 || len2 === 0) return { factor: 0, len1, len2 };
-    const cosAngle = Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (len1 * len2)));
+    const cosAngle = Math.max(
+      -1,
+      Math.min(1, (v1x * v2x + v1y * v2y) / (len1 * len2))
+    );
     const tanHalf = Math.tan(Math.acos(cosAngle) / 2);
     return { factor: tanHalf > 0 ? 1 / tanHalf : 0, len1, len2 };
   }
 
-  private tracePolygonPath(vertices: {x:number; y: number}[], radius: number) {
+  private tracePolygonPath(
+    vertices: { x: number; y: number }[],
+    radius: number
+  ) {
     const n = vertices.length;
 
     if (radius > 0 && n >= 3) {
@@ -1620,17 +1869,21 @@ export class Game {
       // tangent distance longer than the edge itself
       let safeRadius = radius;
       for (let i = 0; i < n; i++) {
-        const { factor, len1, len2 } = this.cornerTangentFactor(vertices[(i - 1 + n) % n], vertices[i], vertices[(i + 1) % n]);
+        const { factor, len1, len2 } = this.cornerTangentFactor(
+          vertices[(i - 1 + n) % n],
+          vertices[i],
+          vertices[(i + 1) % n]
+        );
         if (factor > 0) {
-          safeRadius = Math.min(safeRadius, (Math.min(len1, len2) / 2) / factor);
+          safeRadius = Math.min(safeRadius, Math.min(len1, len2) / 2 / factor);
         }
       }
       radius = Math.max(0, safeRadius);
     }
 
-    if(radius <= 0) {
+    if (radius <= 0) {
       this.ctx.moveTo(vertices[0].x, vertices[0].y);
-      for(let i = 1; i < vertices.length; i++){
+      for (let i = 1; i < vertices.length; i++) {
         this.ctx.lineTo(vertices[i].x, vertices[i].y);
       }
       this.ctx.closePath();
@@ -1639,7 +1892,11 @@ export class Game {
     const last = vertices[n - 1];
     const first = vertices[0];
     const edgeLen = Math.hypot(first.x - last.x, first.y - last.y);
-    const { factor: lastFactor } = this.cornerTangentFactor(vertices[(n - 2 + n) % n], last, first);
+    const { factor: lastFactor } = this.cornerTangentFactor(
+      vertices[(n - 2 + n) % n],
+      last,
+      first
+    );
     const startDist = Math.min(radius * lastFactor, edgeLen);
     const startX = last.x + ((first.x - last.x) * startDist) / edgeLen;
     const startY = last.y + ((first.y - last.y) * startDist) / edgeLen;
@@ -1651,5 +1908,118 @@ export class Game {
     }
     this.ctx.lineTo(startX, startY);
     this.ctx.closePath();
+  }
+
+  private send(msg: OutgoingMessage) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(msg));
+    } else {
+      console.warn(
+        `Socket not open, dropped ${msg.type} for shape ${msg.shapeId}`
+      );
+    }
+  }
+
+  private connectWebSocket() {
+    // Don't open a second socket if one is already connecting or open
+    if (
+      this.socket &&
+      (this.socket.readyState === WebSocket.CONNECTING ||
+        this.socket.readyState === WebSocket.OPEN)
+    ) {
+      return;
+    }
+    const url = `${WS_URL}?token=${encodeURIComponent(this.token)}`;
+    this.socket = new WebSocket(url);
+
+    this.socket.onopen = () => {
+      this.isConnected = true;
+      this.onConnectionChange?.(true);
+      // Each new socket must join the room again
+      this.socket?.send(
+        JSON.stringify({
+          type: "join_room",
+          roomId: this.roomId,
+        })
+      );
+    };
+    this.socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type == "chat") {
+        const parsedShape = JSON.parse(message.message);
+        // the server echoes our own new shapes back to us too, and we already pushed
+        // them locally when creating — skip anything we already have by id
+        if (
+          isKnownShape(parsedShape.shape) &&
+          !this.existingShapes.some((s) => s.id === parsedShape.shape.id)
+        ) {
+          this.existingShapes.push(parsedShape.shape);
+          this.clearCanvas();
+        }
+      } else if (message.type === "shape_update") {
+        const parsed = JSON.parse(message.message);
+        if (isKnownShape(parsed.shape)) {
+          const index = this.existingShapes.findIndex(
+            (s) => s.id === message.shapeId
+          );
+          if (index !== -1) {
+            this.existingShapes[index] = parsed.shape;
+            this.clearCanvas();
+          }
+        }
+      } else if (message.type === "shape_delete") {
+        const index = this.existingShapes.findIndex(
+          (s) => s.id === message.shapeId
+        );
+        if (index !== -1) {
+          this.existingShapes.splice(index, 1);
+          if (this.selectedShapeIndex === index) {
+            this.selectedShapeIndex = null;
+          } else if (
+            this.selectedShapeIndex !== null &&
+            this.selectedShapeIndex > index
+          ) {
+            // keep pointing at the same shape after the splice shifts everything after it down by one
+            this.selectedShapeIndex -= 1;
+          }
+          this.clearCanvas();
+        }
+      } else if (message.type === "existing_shapes") {
+        const shapes = (message.messages as StoredShapeRow[])
+          .map(toShape)
+          .filter(isKnownShape)
+        
+        const selectedId =
+          this.selectedShapeIndex !== null
+          ? this.existingShapes[this.selectedShapeIndex]?.id ?? null
+          : null;
+        
+        this.existingShapes = shapes;
+
+        const newIndex = selectedId ? shapes.findIndex((s) => s.id === selectedId) : -1;
+        this.selectedShapeIndex = newIndex === -1 ? null : newIndex;
+        if(this.selectedShapeIndex === null) {
+          this.activeHandle = null;
+          this.isDraggingShape = false;
+        }
+        
+        this.eraserMarkedIds.clear();
+        this.syncPanel();
+        this.clearCanvas();
+      }
+    };
+    this.socket.onclose = (e) => {
+      this.isConnected = false;
+      this.onConnectionChange?.(false);
+      if (this.destroyed) return;
+
+      console.warn("WebSocket closed:", e);
+      setTimeout(() => this.connectWebSocket(), 2000);
+    };
+    this.socket.onerror = (err) => {
+      this.isConnected = false;
+      this.onConnectionChange?.(false);
+      console.error("WebSocket error:", err);
+    };
   }
 }

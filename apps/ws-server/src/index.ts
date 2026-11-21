@@ -75,7 +75,30 @@ wss.on("connection", function connection(ws, request) {
 
     if (parsedData.type === "join_room") {
       const user = users.find((x) => x.ws === ws);
-      user?.rooms.push(parsedData.roomId);
+      if(!user) return;
+
+      const roomId = parsedData.roomId;
+      if(!user.rooms.includes(roomId)) {
+        user.rooms.push(roomId);
+      }
+
+      try {
+        const chats = await prismaClient.chat.findMany({
+          where: { roomId: Number(roomId)},
+          orderBy: { id: "asc"}
+        });
+
+        // Reply to this socket only, not the broadcast
+        ws.send(
+          JSON.stringify({
+            type: "existing_shapes",
+            roomId,
+            messages: chats.map((c) => ({ message: c.message, shapeId: c.shapeId }))
+          })
+        )
+      } catch (e) {
+        ws.send(JSON.stringify({type: "error", message: "Failed to load shapes"}))
+      }
     }
 
     if (parsedData.type === "leave_room") {
@@ -204,4 +227,11 @@ wss.on("connection", function connection(ws, request) {
       }
     }
   });
+
+  ws.on("close", () => {
+    const index = users.findIndex((u) => u.ws === ws);
+    if(index !== -1) {
+      users.splice(index, 1);
+    }
+  })
 });

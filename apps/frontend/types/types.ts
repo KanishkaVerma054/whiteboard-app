@@ -57,3 +57,12 @@ export const LINE_THRESHOLD = 8;
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 30;
 export const ZOOM_STEP = 0.1;
+
+
+//-----message type for websockets--------
+export type OutgoingMessage =
+    | { type: "chat"; shapeId: string; message: string; roomId: string }
+    | { type: "shape_update"; shapeId: string; message: string; roomId: string }
+    | {type: "shape_delete"; shapeId: string; roomId: string};
+
+export type StoredShapeRow = {message: string; shapeId: string | null};
