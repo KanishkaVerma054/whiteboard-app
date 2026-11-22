@@ -33,6 +33,7 @@ import {
 import { SelectionLogic, type HandleName } from "./SelectionLogic";
 import { EraserLogic } from "./EraserLogic";
 import { WS_URL } from "@/config";
+import { MessageQueue } from "./MessageQueue";
 
 // const HANDLE_SCREEN_SIZE = 8; // px, kept constant on screen regardless of zoom
 // const HIT_TEST_PADDING = 6; // px, generous click target for thin shapes like line/arrow
@@ -201,6 +202,8 @@ export class Game {
   private currentBgFill: string = DEFAULT_BG_FILL;
   private currentStrokeEdge: StrokeEdge = DEFAULT_STROKE_EDGE;
   private eraserMarkedIds: Set<string> = new Set();
+  private messageQueue: MessageQueue;
+  private isSynced = false;
 
   private socket: WebSocket | null = null;
   private token: string;
@@ -225,6 +228,7 @@ export class Game {
     this.onScaleChangeCallback = onScaleChangeCallback;
     this.onPanelChange = onPanelChange;
     this.onConnectionChange = onConnectionChange;
+    this.messageQueue = new MessageQueue(roomId);
     this.init();
     // this.initHandlers();
     this.initMouseHandlers();
@@ -324,6 +328,7 @@ export class Game {
     }
 
     this.existingShapes = this.existingShapes.filter(isKnownShape);
+    this.existingShapes = this.applyPending(this.existingShapes);
 
     try {
       const storedViewport = localStorage.getItem(this.viewportStorageKey());
@@ -1910,14 +1915,27 @@ export class Game {
     this.ctx.closePath();
   }
 
+  // private send(msg: OutgoingMessage) {
+  //   if (this.socket?.readyState === WebSocket.OPEN) {
+  //     this.socket.send(JSON.stringify(msg));
+  //   } else {
+  //     console.warn(
+  //       `Socket not open, dropped ${msg.type} for shape ${msg.shapeId}`
+  //     );
+  //   }
+  // }
   private send(msg: OutgoingMessage) {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(msg));
-    } else {
-      console.warn(
-        `Socket not open, dropped ${msg.type} for shape ${msg.shapeId}`
-      );
-    }
+    this.messageQueue.enqueue(msg);
+    this.flushQueue();
+  }
+
+  private flushQueue() {
+    if(!this.isSynced) return;
+    this.messageQueue.flush((msg) => {
+      if (this.socket?.readyState !== WebSocket.OPEN) return false;
+      this.socket.send(JSON.stringify(msg))
+      return true;
+    })
   }
 
   private connectWebSocket() {
@@ -1985,9 +2003,10 @@ export class Game {
           this.clearCanvas();
         }
       } else if (message.type === "existing_shapes") {
-        const shapes = (message.messages as StoredShapeRow[])
+        const serverShapes = (message.messages as StoredShapeRow[])
           .map(toShape)
-          .filter(isKnownShape)
+          .filter(isKnownShape);
+        const shapes = this.applyPending(serverShapes);
         
         const selectedId =
           this.selectedShapeIndex !== null
@@ -2006,10 +2025,14 @@ export class Game {
         this.eraserMarkedIds.clear();
         this.syncPanel();
         this.clearCanvas();
+
+        this.isSynced = true;
+        this.flushQueue();
       }
     };
     this.socket.onclose = (e) => {
       this.isConnected = false;
+      this.isSynced = false;
       this.onConnectionChange?.(false);
       if (this.destroyed) return;
 
@@ -2021,5 +2044,35 @@ export class Game {
       this.onConnectionChange?.(false);
       console.error("WebSocket error:", err);
     };
+  }
+
+  // Apply unsent queued changes on top of a shape list (safe to run more than once)
+  private applyPending(shapes: Shape[]): Shape[] {
+    const result = [...shapes];
+    for(const msg of this.messageQueue.getAll()) {
+      const index = result.findIndex((s) => s.id === msg.shapeId);
+
+      if(msg.type === "shape_delete") {
+        if(index !== -1) result.splice(index, 1);
+        continue;
+      }
+
+      let shape: unknown;
+      try {
+        shape = JSON.parse(msg.message).shape;
+      } catch {
+        continue;
+      }
+      if(!isKnownShape(shape)) continue;
+
+      if(index !== -1) {
+        result[index] = shape; // create or update of a shape already in the list
+      } else if (msg.type === "chat") {
+        result.push(shape); // new shape the server doesn't have yet
+      }
+      // shape_update for a shape that isn't in the list: someone deleted it while you
+      // were offline, so it's skipped (deleting wins over your edit)
+    }
+    return result;
   }
 }
