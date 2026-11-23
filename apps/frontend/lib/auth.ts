@@ -21,3 +21,11 @@ export function clearToken() {
         localStorage.removeItem(TOKEN_KEY)
     } catch {}
 }
+
+// Only allow paths inside this site, so ?callbackUrl= can't send a user to another site after sign-in
+export function safeCallbackUrl(raw: string | null): string {
+    if (!raw) return "/";
+    if (!raw.startsWith("/")) return "/";                             // "https://evil.com"
+    if (raw.startsWith("//") || raw.startsWith("/\\")) return "/";    // "//evil.com" also means another site
+    return raw;
+}

@@ -209,6 +209,7 @@ export class Game {
   private token: string;
   private isConnected = false;
   private onConnectionChange?: (isConnected: boolean) => void;
+  private onAuthError?: () => void;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -216,7 +217,8 @@ export class Game {
     token: string,
     onScaleChangeCallback: (scale: number) => void,
     onPanelChange?: (state: PanelState | null) => void,
-    onConnectionChange?: (isConnected: boolean) => void
+    onConnectionChange?: (isConnected: boolean) => void,
+    onAuthError?: () => void
   ) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
@@ -228,6 +230,7 @@ export class Game {
     this.onScaleChangeCallback = onScaleChangeCallback;
     this.onPanelChange = onPanelChange;
     this.onConnectionChange = onConnectionChange;
+    this.onAuthError = onAuthError
     this.messageQueue = new MessageQueue(roomId);
     this.init();
     // this.initHandlers();
@@ -2035,6 +2038,12 @@ export class Game {
       this.isSynced = false;
       this.onConnectionChange?.(false);
       if (this.destroyed) return;
+
+      if(e.code === 1008) {
+        console.warn("WebSocket rejected: not authenticated");
+        this.onAuthError?.();
+        return;
+      }
 
       console.warn("WebSocket closed:", e);
       setTimeout(() => this.connectWebSocket(), 2000);

@@ -1,9 +1,12 @@
-import { AuthPage } from "@/components/AuthPage"
+import { Suspense } from "react";
+import { AuthPage } from "@/components/AuthPage";
 
 const Signin = () => {
   return (
-    <AuthPage isSignin={true}/>
-  )
-}
+    <Suspense>
+      <AuthPage isSignin={true} />
+    </Suspense>
+  );
+};
 
 export default Signin;

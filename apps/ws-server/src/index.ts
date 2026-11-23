@@ -1,5 +1,5 @@
 import { JwtPayload } from "jsonwebtoken";
-import { WebSocket, WebSocketServer } from "ws";
+import { RawData, WebSocket, WebSocketServer } from "ws";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "@repo/backend-common/config";
 import { prismaClient } from "@repo/db/client";
@@ -44,14 +44,14 @@ wss.on("connection", function connection(ws, request) {
   const token = queryParams.get("token");
 
   if (!token) {
-    ws.close();
+    ws.close(1008, "User not authenticated");
     return;
   }
 
   const userId = checkUser(token);
 
   if (userId == null) {
-    ws.close();
+    ws.close(1008, "User not authenticated");
     return null;
   }
 
@@ -61,8 +61,17 @@ wss.on("connection", function connection(ws, request) {
     ws,
   });
 
-  ws.on("message", async function message(data) {
-    //TODO: check the type first only if its a string then proceed
+  // Handle this connection's messages one at a time, in the order they arrived.
+  // Without this, an async handler for "move A" can finish before "create A",
+  // and updateMany matches 0 rows.
+  let messageChain: Promise<void> = Promise.resolve();
+  ws.on("message", (data) => {
+    messageChain = messageChain
+      .then(() => handleMessage(data))
+      .catch((err) => console.error("Message handler failed:", err));
+  });
+
+  const handleMessage = async (data: RawData) => {
     let parsedData;
     if (typeof data !== "string") {
       parsedData = JSON.parse(data.toString());
@@ -226,7 +235,7 @@ wss.on("connection", function connection(ws, request) {
         );
       }
     }
-  });
+  };
 
   ws.on("close", () => {
     const index = users.findIndex((u) => u.ws === ws);

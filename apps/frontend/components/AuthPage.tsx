@@ -1,12 +1,15 @@
 "use client";
 import { useState } from "react";
 import axios from "axios";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { HTTP_BACKEND } from "@/config";
-import { setToken } from "@/lib/auth";
+import { safeCallbackUrl, setToken } from "@/lib/auth";
 
 export const AuthPage = ({ isSignin }: { isSignin: boolean }) => {
   const router = useRouter();
+  // where to go after sign-in, e.g. the room that sent us here (like CollabyDraw's signin-form.tsx:27)
+  const searchParams = useSearchParams();
+  const callbackUrl = safeCallbackUrl(searchParams.get("callbackUrl"));
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -23,14 +26,15 @@ export const AuthPage = ({ isSignin }: { isSignin: boolean }) => {
           return;
         }
         setToken(res.data.token);
-        router.push("/");
+        router.push(callbackUrl);
       } else {
         const res = await axios.post(`${HTTP_BACKEND}/signup`, { username, password, name });
         if (!res.data.userId) {
           setError(res.data.message ?? "Sign up failed");
           return;
         }
-        router.push("/signin");
+        // keep the room through signup → signin
+        router.push(`/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
       }
     } catch (e) {
       // 403 (wrong password / no user) and 411 (user exists) land here

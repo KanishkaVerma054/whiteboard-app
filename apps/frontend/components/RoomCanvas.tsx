@@ -12,11 +12,11 @@ const RoomCanvas = ({ roomId }: { roomId: string }) => {
   useEffect(() => {
     const t = getToken();
     if (!t) {
-      router.push("/signin");
+      router.push(`/signin?callbackUrl=${encodeURIComponent(`/canvas/${roomId}`)}`);
       return;
     }
     setTokenState(t);
-  }, [router]);
+  }, [router, roomId]);
 
   if (!token) return <div>Loading...</div>;
 

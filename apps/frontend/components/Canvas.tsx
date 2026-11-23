@@ -4,9 +4,10 @@ import { AlignCenter, AlignLeft, AlignRight, CaseSensitive, Circle, CodeXml, Dia
 import { Game } from "@/app/draw/Game";
 import { BG_FILLS, DEFAULT_BG_FILL, FONT_FAMILIES, FONT_SIZES, FontFamily, FontSizes, MAX_ZOOM, MIN_ZOOM, PanelState, STROKE_COLOURS, STROKE_WIDTHS, StrokeEdge, StrokeStyle, StrokeWidth, TextAlign, ZOOM_STEP } from "@/types/types";
 import { EraserTrail } from "./EraserTrail";
+import { useRouter } from "next/navigation";
+import { clearToken } from "@/lib/auth";
 
 //TODO: use enumns for circle rect pencil etc
-
 
 export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text" | "eraser";
 
@@ -35,6 +36,7 @@ const Canvas = ({ roomId, token }: { roomId: string; token: string }) => {
   const [scale,  setScale] = useState(1);
   const [iConnected, setIsConnected] = useState(false);
   const[panel, setPanel] = useState<PanelState | null>(null);
+  const router = useRouter();
 
 
   useEffect(() => {
@@ -43,14 +45,17 @@ const Canvas = ({ roomId, token }: { roomId: string; token: string }) => {
 
   useEffect(() => {
     if (canvasRef.current) {
-      const g = new Game(canvasRef.current, roomId, token, setScale,  setPanel, setIsConnected );
+      const g = new Game(canvasRef.current, roomId, token, setScale,  setPanel, setIsConnected, () => {
+        clearToken();
+        router.push(`/signin?callbackUrl=${encodeURIComponent(`/canvas/${roomId}`)}`);
+      } );
       setGame(g);
 
       return () => {
         g.destroy();
       };
     }
-  }, [canvasRef, roomId, token]);
+  }, [canvasRef, roomId, token, router]);
 
   // To update tool when changed
   useEffect(() => {
