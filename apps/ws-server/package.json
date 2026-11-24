@@ -10,16 +10,19 @@
   },
   "devDependencies": {
     "@repo/backend-common": "workspace:*",
-    "@repo/typescript-config": "workspace:*"
+    "@repo/typescript-config": "workspace:*",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.2",
+    "typescript": "6.0.3"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@types/jsonwebtoken": "^9.0.10",
-    "@types/ws": "^8.18.2",
+    "@repo/db": "workspace:*",
+    "@repo/redis": "workspace:*",
     "jsonwebtoken": "^9.0.3",
-    "ws": "^8.23.0",
-    "@repo/db": "workspace:*"
+    "ws": "^8.23.0"
   }
 }
