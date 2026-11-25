@@ -6,11 +6,12 @@ import { RoomBroadcaster } from "./RoomBroadcaster.ts";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const broadcaster = new RoomBroadcaster(broadcastLocal);
-// ugly state management using global variable
 interface User {
   ws: WebSocket;
   rooms: string[];
   userId: string;
+  isAlive: boolean;
+  chain: Promise<void>;
 }
 
 const users: User[] = [];
@@ -49,6 +50,49 @@ async function main() {
 
   const wss = new WebSocketServer({ port: PORT });
 
+  const HEARTBEAT_MS = 30_000;
+
+  const heartbeat = setInterval(() => {
+    for (const user of [...users]) {
+      if(!user.isAlive) {
+        console.log("terminated dead socket")
+        user.ws.terminate();
+        continue;
+      }
+      user.isAlive = false;
+      user.ws.ping();
+    }
+  }, HEARTBEAT_MS);
+
+  wss.on("close", () => clearInterval(heartbeat));
+
+  let shuttingDown = false;
+
+  const shutdown = async (signal: string) => {
+    if(shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received, shutting down...`);
+
+    setTimeout(() => process.exit(1), 10_000).unref();
+
+    clearInterval(heartbeat);
+    wss.close();
+
+    const closing = [...users];
+
+    closing.forEach((u) => u.ws.close(1001, "Server restarting"));
+
+    await Promise.allSettled(closing.map((u) => u.chain));
+
+    await broadcaster.close();
+    await prismaClient.$disconnect();
+    console.log("shutdown complete");
+    process.exit(0);
+  }
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
   wss.on("connection", function connection(ws, request) {
     const url = request.url;
     if (!url) {
@@ -69,18 +113,25 @@ async function main() {
       return null;
     }
 
-    users.push({
+    const currentUser: User = {
       userId,
       rooms: [],
       ws,
-    });
+      isAlive: true,
+      chain: Promise.resolve(),
+    }
+    users.push(currentUser);
+
+    // Heartbeat: To know which servers are dead or alive
+    ws.on("pong", () => {
+      currentUser.isAlive = true
+    })
 
     // Handle this connection's messages one at a time, in the order they arrived.
     // Without this, an async handler for "move A" can finish before "create A",
     // and updateMany matches 0 rows.
-    let messageChain: Promise<void> = Promise.resolve();
     ws.on("message", (data) => {
-      messageChain = messageChain
+      currentUser.chain = currentUser.chain
         .then(() => handleMessage(data))
         .catch((err) => console.error("Message handler failed:", err));
     });
