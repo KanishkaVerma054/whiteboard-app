@@ -1,6 +1,4 @@
 import { OutgoingMessage } from "@/types/types";
-
-
 export class MessageQueue {
     private queue: OutgoingMessage[] = [];
     private storageKey: string;

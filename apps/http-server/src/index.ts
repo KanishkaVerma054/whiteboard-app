@@ -1,15 +1,21 @@
 import express from "express"
 import jwt from "jsonwebtoken"
 import { JWT_SECRET } from "@repo/backend-common/config";
-import { middleware } from "./middleware";
+import { middleware } from "./middleware.ts";
 import {CreateRoomSchema, CreateUserSchema, SigninSchema} from "@repo/common/types"
 import { prismaClient } from "@repo/db/client"
 import bcrypt from "bcrypt"
 import cors from "cors"
 
+const PORT = Number(process.env.PORT ?? 3001);
+
 const app = express();
-app.use(express.json())
-app.use(cors())
+app.use(express.json());
+app.use(cors());
+
+app.get("/health", (_req, res) => {
+    res.json({ ok: true, port: PORT });
+  });
 
 app.post("/signup", async (req, res) => {
 
@@ -168,4 +174,24 @@ app.get("/room/:slug", async(req, res) => {
     };
 });
 
-app.listen(Number(process.env.PORT ?? 3001));
+const server = app.listen(PORT, () => {
+    console.log(`http-server listening on :${PORT}`);
+});
+
+let shuttingDown = false;
+const shutdown = (signal: string) => {
+    if(shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received, shutting down...`);
+
+    setTimeout(() => process.exit(1), 10_000).unref();
+
+    server.close(async () => {
+        await prismaClient.$disconnect();
+        console.log("shutdown complete");
+        process.exit(0);
+    })
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
