@@ -237,6 +237,8 @@ export class Game {
     this.initMouseHandlers();
     window.addEventListener("keydown", this.keyDownHandler);
     window.addEventListener("mouseup", this.finishErasing);
+    window.addEventListener("resize", this.resizeHandler);
+    this.resizeHandler(); // initial size
     this.connectWebSocket();
   }
 
@@ -267,6 +269,7 @@ export class Game {
     this.canvas.removeEventListener("dblclick", this.dblClickHandler);
     window.removeEventListener("keydown", this.keyDownHandler);
     window.removeEventListener("mouseup", this.finishErasing);
+    window.removeEventListener("resize", this.resizeHandler);
   }
 
   // Delete/Backspace removes the selected shape (and broadcasts the delete); Escape clears the selection.
@@ -1400,6 +1403,14 @@ export class Game {
     this.eraserMarkedIds.clear();
     this.clearCanvas();
   };
+
+  //---------------------window resizing------------------------
+  resizeHandler = () => {
+    if(this.destroyed) return;
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+    this.clearCanvas();
+  }
 
   //-------------------------------TextBox------------------------------
 

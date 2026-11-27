@@ -7,8 +7,6 @@ import { EraserTrail } from "./EraserTrail";
 import { useRouter } from "next/navigation";
 import { clearToken } from "@/lib/auth";
 
-//TODO: use enumns for circle rect pencil etc
-
 export type Tool = "circle" | "rect" | "pencil" | "line" | "triangle" | "diamond" | "arrow" | "grab" | "select" | "text" | "eraser";
 
 const ERASER_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Ccircle cx='7' cy='7' r='5' fill='black' stroke='white'/%3E%3C/svg%3E") 8 8, auto`;
@@ -32,7 +30,6 @@ const Canvas = ({ roomId, token }: { roomId: string; token: string }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [game, setGame] = useState<Game>();
   const [selectedTool, setSelectedTool] = useState<Tool>("select");
-  // const { width, height } = useWindowSize();
   const [scale,  setScale] = useState(1);
   const [iConnected, setIsConnected] = useState(false);
   const[panel, setPanel] = useState<PanelState | null>(null);
@@ -66,10 +63,6 @@ const Canvas = ({ roomId, token }: { roomId: string; token: string }) => {
     <div className="overflow-hidden h-[100vh] relative">
       <canvas
         ref={canvasRef}
-        width={window.innerWidth}
-        // width={width}
-        // height={height}
-        height={window.innerHeight}
         className={
           selectedTool === "grab"
             ? "cursor-grab"
